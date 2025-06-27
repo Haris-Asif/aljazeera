@@ -2,73 +2,36 @@ import streamlit as st
 import pandas as pd
 import urllib.parse
 import re
+import os
 import json
 import gspread
-from datetime import datetime
 from oauth2client.service_account import ServiceAccountCredentials
 
-PROPERTIES_FILE = 'properties.csv'
-CONTACTS_FILE = 'contacts.csv'
+# ---------------------------- CONFIG ----------------------------
+SHEET_NAME = "Al Jazeera Real Estate & Developers"
+WORKSHEET_NAME = "Plots_Sale"
+CONTACTS_FILE = "contacts.csv"
+PROPERTIES_FILE = "properties.csv"
 
-# --- Normalize Helpers ---
-def normalize_size(size):
-    if pd.isna(size):
-        return ""
-    return re.sub(r'\s*[*+xX/]\s*', 'x', str(size).strip().lower())
+# ------------------------ NORMALIZERS ------------------------
 
-def normalize_sector(value):
-    if pd.isna(value):
+def normalize_sector(sector):
+    if not isinstance(sector, str):
         return ""
-    value = re.sub(r'[^a-zA-Z0-9]', '', str(value)).lower()
-    if 'i14' in value:
-        return 'i-14'
-    elif 'i15' in value:
-        return 'i-15'
-    elif 'i16' in value:
-        return 'i-16'
-    return ""
+    sector = sector.lower()
+    match = re.search(r'i\s*[-/]?\s*(1[456])', sector)
+    return f"I-{match.group(1)}" if match else sector.strip().upper()
 
-def normalize_subsector(value):
-    if pd.isna(value):
+def normalize_subsector(subsector):
+    if not isinstance(subsector, str):
         return ""
-    match = re.search(r'\b([1-4])\b', str(value))
+    match = re.search(r'([1-4])\b', subsector)
     return match.group(1) if match else ""
 
-# --- Google Sheets Integration ---
-@st.cache_data(ttl=21600)  # refresh every 6 hours
-def sync_properties_from_google_sheet():
-    creds_dict = json.loads(st.secrets["GCP_JSON"])
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-
-    SHEET_NAME = "Al Jazeera Real Estate & Developers"
-    WORKSHEET_NAME = "Plots_Sale"
-
-    sheet = client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
-    data = sheet.get_all_records()
-    df = pd.DataFrame(data)
-
-    df.to_csv(PROPERTIES_FILE, index=False)
-    return df
-
-# --- Contact Management ---
-def load_contacts():
-    try:
-        return pd.read_csv(CONTACTS_FILE)
-    except:
-        return pd.DataFrame(columns=['Name', 'Contact1', 'Contact2', 'Contact3'])
-
-def save_contact(name, contact1, contact2, contact3):
-    df = load_contacts()
-    new_entry = pd.DataFrame([{
-        'Name': name.strip(),
-        'Contact1': contact1.strip(),
-        'Contact2': contact2.strip(),
-        'Contact3': contact3.strip()
-    }])
-    df = pd.concat([df, new_entry], ignore_index=True)
-    df.to_csv(CONTACTS_FILE, index=False)
+def normalize_size(size_str):
+    if not isinstance(size_str, str):
+        return ""
+    return re.sub(r'\s*[*+xX/]\s*', 'x', size_str.strip().lower())
 
 def normalize_phone(phone):
     digits = re.sub(r'\D', '', str(phone))
@@ -79,6 +42,44 @@ def normalize_phone(phone):
     elif len(digits) >= 10:
         return digits[-10:]
     return digits
+
+# ------------------------ GOOGLE SHEET SYNC ------------------------
+
+@st.cache_data(ttl=21600)  # every 6 hours
+def sync_properties_from_google_sheet():
+    creds_dict = st.secrets["GCP_JSON"]
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    sheet = client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
+    data = sheet.get_all_records()
+    df = pd.DataFrame(data)
+
+    df["Normalized Sector"] = df["Sector"].apply(normalize_sector)
+    df["Normalized Subsector"] = df["Subsector"].apply(normalize_subsector)
+    df["Normalized Size"] = df["Plot Size"].apply(normalize_size)
+
+    df.fillna('', inplace=True)
+    df.to_csv(PROPERTIES_FILE, index=False)
+    return df
+
+# ------------------------ CONTACT MANAGEMENT ------------------------
+
+def load_contacts():
+    if os.path.exists(CONTACTS_FILE):
+        return pd.read_csv(CONTACTS_FILE)
+    return pd.DataFrame(columns=['Name', 'Contact1', 'Contact2', 'Contact3'])
+
+def save_contact(name, c1, c2, c3):
+    df = load_contacts()
+    new_row = pd.DataFrame([{
+        'Name': name.strip(),
+        'Contact1': c1.strip(),
+        'Contact2': c2.strip(),
+        'Contact3': c3.strip()
+    }])
+    df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv(CONTACTS_FILE, index=False)
 
 def get_contacts_by_name(name_input):
     df = load_contacts()
@@ -91,119 +92,100 @@ def get_contacts_by_name(name_input):
                 numbers.add(normalize_phone(num))
     return numbers
 
-# --- Main App ---
+# ------------------------ STREAMLIT APP ------------------------
+
 def main():
     st.set_page_config(layout="wide")
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
-    # --- Sync & Load ---
     df = sync_properties_from_google_sheet()
-    df.fillna('', inplace=True)
+    contacts_df = load_contacts()
 
-    # Normalize columns
-    df["NormalizedSector"] = df["Sector"].apply(normalize_sector)
-    df["NormalizedSubsector"] = df["Subsector"].apply(normalize_subsector)
-    df["NormalizedSize"] = df["Plot Size"].apply(normalize_size)
-
-    # --- Sidebar Filters ---
-    st.sidebar.title("🔍 Filters")
-    contacts = load_contacts()
-    dealer_list = sorted(contacts['Name'].dropna().unique())
-    selected_dealer = st.sidebar.selectbox("Select Dealer", [""] + dealer_list)
-    manual_dealer = st.sidebar.text_input("Or type Dealer Name").strip()
-    sector_input = st.sidebar.text_input("Sector (e.g., I-14)").strip().lower()
-    subsector_input = st.sidebar.text_input("Subsector (e.g., 1)").strip()
-    street_input = st.sidebar.text_input("Street#").strip().lower()
-    size_input = st.sidebar.text_input("Plot Size").strip().lower()
-    plot_input = st.sidebar.text_input("Plot#").strip().lower()
-
-    df_filtered = df.copy()
-
-    # Sector Filter
-    if sector_input:
-        target = normalize_sector(sector_input)
-        df_filtered = df_filtered[df_filtered['NormalizedSector'] == target]
-
-    # Subsector Filter
-    if subsector_input:
-        df_filtered = df_filtered[df_filtered['NormalizedSubsector'] == subsector_input]
-
-    # Dealer Filter
-    dealer_final = manual_dealer or selected_dealer
-    if dealer_final:
-        contact_numbers = get_contacts_by_name(dealer_final)
-        if contact_numbers:
-            def row_match(row):
-                combined = " ".join(str(x) for x in row)
-                return any(normalize_phone(num) in re.sub(r'\D', '', combined) for num in contact_numbers)
-            df_filtered = df_filtered[df_filtered.apply(row_match, axis=1)]
-
-    if street_input:
-        df_filtered = df_filtered[df_filtered['Street#'].astype(str).str.lower().str.contains(street_input)]
-
-    if size_input:
-        df_filtered = df_filtered[df_filtered['NormalizedSize'] == normalize_size(size_input)]
-
-    if plot_input:
-        df_filtered = df_filtered[df_filtered['Plot No#'].astype(str).str.lower().str.contains(plot_input)]
-
-    # --- Display Filtered Results ---
-    st.subheader("📋 Filtered Listings")
-    st.dataframe(df_filtered[['Date', 'Sector', 'Subsector', 'Plot No#', 'Street#', 'Plot Size', 'Demand/Price', 'Contact', 'Name of Dealer']])
-
-    # --- Add Contact ---
+    # ---------------------- CONTACT ENTRY ----------------------
     with st.expander("➕ Add Contact"):
         with st.form("add_contact_form", clear_on_submit=True):
-            name = st.text_input("Name", key="name")
+            name = st.text_input("Contact Name", key="name")
             c1 = st.text_input("Contact 1", key="c1")
             c2 = st.text_input("Contact 2", key="c2")
             c3 = st.text_input("Contact 3", key="c3")
             if st.form_submit_button("Save"):
                 if name and c1:
                     save_contact(name, c1, c2, c3)
-                    st.success("✅ Contact saved successfully.")
+                    st.success(f"✅ Contact '{name}' saved.")
                 else:
-                    st.warning("❗ Name and Contact 1 are required.")
+                    st.error("Name and Contact 1 are required.")
 
-    # --- WhatsApp Message Generator ---
+    # ---------------------- FILTERS ----------------------
+    st.sidebar.title("🔍 Filters")
+    sector_input = st.sidebar.text_input("Sector (e.g., I-14)").strip()
+    subsector_input = st.sidebar.text_input("Subsector (1-4)").strip()
+    size_input = st.sidebar.text_input("Plot Size").strip().lower()
+    dealer_input = st.sidebar.selectbox("Dealer", [""] + sorted(contacts_df["Name"].dropna().unique().tolist()))
+    street_input = st.sidebar.text_input("Street#").strip()
+
+    df_filtered = df.copy()
+
+    if sector_input:
+        normalized_sector = normalize_sector(sector_input)
+        df_filtered = df_filtered[df_filtered["Normalized Sector"] == normalized_sector]
+
+    if subsector_input:
+        normalized_sub = normalize_subsector(subsector_input)
+        df_filtered = df_filtered[df_filtered["Normalized Subsector"] == normalized_sub]
+
+    if size_input:
+        norm_size = normalize_size(size_input)
+        df_filtered = df_filtered[df_filtered["Normalized Size"] == norm_size]
+
+    if dealer_input:
+        numbers = get_contacts_by_name(dealer_input)
+        def has_contact(row):
+            full_text = " ".join(str(x) for x in row.values)
+            return any(normalize_phone(num) in re.sub(r'\D', '', full_text) for num in numbers)
+        df_filtered = df_filtered[df_filtered.apply(has_contact, axis=1)]
+
+    if street_input:
+        df_filtered = df_filtered[df_filtered['Street#'].astype(str).str.lower().str.contains(street_input.lower())]
+
+    # ---------------------- DISPLAY ----------------------
+    st.subheader("📋 Filtered Listings")
+    display_cols = ['Date', 'Sector', 'Subsector', 'Plot No#', 'Street#', 'Plot Size', 'Demand/Price', 'Contact', 'Name of Dealer', 'Description/Details']
+    st.dataframe(df_filtered[display_cols])
+
+    # ---------------------- WHATSAPP GENERATION ----------------------
     st.subheader("📤 Send WhatsApp Message")
-    phone_input = st.text_input("Enter number (e.g., 03001234567)")
-
+    phone_input = st.text_input("📱 Recipient Phone (e.g., 03001234567)")
     if st.button("Generate WhatsApp Message"):
         if not phone_input:
-            st.warning("⚠️ Please enter phone number.")
-        else:
-            msg_df = df_filtered.copy()
-            if msg_df.empty:
-                st.warning("No listings found.")
-            else:
-                msg_df['GroupKey'] = msg_df['NormalizedSector'] + "/" + msg_df['NormalizedSubsector'] + "||" + msg_df['NormalizedSize']
-                grouped = msg_df.drop_duplicates(subset=['NormalizedSector', 'NormalizedSubsector', 'NormalizedSize', 'Plot No#', 'Street#'])
+            st.warning("Please enter recipient phone number.")
+            return
 
-                result = []
-                for (groupkey), group_df in grouped.groupby('GroupKey'):
-                    sector_part, size_part = groupkey.split("||")
-                    if not sector_part or not size_part:
-                        continue
-                    header = f"*Available options in {sector_part}/{group_df['NormalizedSubsector'].iloc[0]} - Size: {size_part}*"
-                    listings = []
-                    for _, row in group_df.iterrows():
-                        sector = normalize_sector(row['Sector'])
-                        line = ""
-                        if sector == "i-15":
-                            line = f"St: {row['Street#']} | P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}"
-                        else:
-                            line = f"P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}"
-                        listings.append(line)
-                    result.append(header + "\n" + "\n".join(listings))
+        send_df = df_filtered.copy()
+        send_df["Norm Size"] = send_df["Plot Size"].apply(normalize_size)
+        send_df["SectorKey"] = send_df["Normalized Sector"] + "/" + send_df["Normalized Subsector"]
 
-                message = "\n\n".join(result)
-                number = "92" + phone_input.strip().lstrip("0")
-                encoded = urllib.parse.quote(message)
-                url = f"https://wa.me/{number}?text={encoded}"
+        seen = set()
+        msg_blocks = []
 
-                st.success("✅ WhatsApp message generated!")
-                st.markdown(f"[📨 Send Message]({url})", unsafe_allow_html=True)
+        for (sector_key, size), group in send_df.groupby(["SectorKey", "Norm Size"]):
+            rows = []
+            for _, row in group.iterrows():
+                key = f"{row['SectorKey']}|{row['Plot No#']}|{row['Street#']}|{row['Norm Size']}"
+                if key in seen:
+                    continue
+                seen.add(key)
 
+                prefix = f"St: {row['Street#']} | " if row["Normalized Sector"] == "I-15" else ""
+                rows.append(f"{prefix}P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}")
+
+            if rows:
+                msg_blocks.append(f"*Available options in {sector_key} - Size: {size}:*\n" + "\n".join(rows))
+
+        final_msg = "\n\n".join(msg_blocks)
+        wa_url = f"https://wa.me/92{phone_input.strip()[-10:]}?text={urllib.parse.quote(final_msg)}"
+        st.success("✅ Message generated.")
+        st.markdown(f"[📨 Send on WhatsApp]({wa_url})", unsafe_allow_html=True)
+
+# ---------------------- MAIN ----------------------
 if __name__ == "__main__":
     main()
