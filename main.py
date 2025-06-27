@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import urllib.parse
 import re
+import json
 import os
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -50,7 +51,8 @@ def normalize_subsector(subsector):
 @st.cache_data(ttl=60 * 60 * SYNC_INTERVAL_HOURS)
 def sync_properties_from_google_sheet():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+    creds_dict = json.loads(st.secrets["GCP_JSON"])
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     sheet = client.open(GOOGLE_SHEET_NAME).worksheet(GOOGLE_WORKSHEET_NAME)
     data = sheet.get_all_records()
