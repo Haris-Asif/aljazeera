@@ -10,7 +10,7 @@ import os
 SPREADSHEET_NAME = "Al Jazeera Real Estate & Developers"
 WORKSHEET_NAME = "Plots_Sale"
 CSV_FILE = "contacts.csv"
-START_ROW = 10928  # Google Sheet rows start from 1 (header at 10928, data at 10929)
+START_ROW = 10929  # Google Sheet rows start from 1 (header at 10928, data at 10929)
 
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
