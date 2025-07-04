@@ -6,8 +6,8 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 # Google Sheets Setup
-SHEET_NAME = "Al Jazeera Real Estate & Developers"
-WORKSHEET_NAME = "Plots_Sale"
+SHEET_NAME = "Plots_Sale"
+WORKSHEET_NAME = "Al Jazeera Real Estate & Developers"
 
 # Load credentials from Streamlit secrets
 @st.cache_data(ttl=21600)
