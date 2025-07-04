@@ -7,7 +7,7 @@ import urllib.parse
 # Constants
 SPREADSHEET_NAME = "Al Jazeera Real Estate & Developers"
 WORKSHEET_NAME = "Plots_Sale"
-GSHEET_HEADER_ROW = 10928  # This is where the header row is
+GSHEET_HEADER_ROW = 10929  # This is where the header row is
 CONTACTS_FILE = "contacts.csv"
 
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
