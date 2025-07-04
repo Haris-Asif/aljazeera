@@ -5,6 +5,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import urllib.parse
 import datetime
 import os
+import re
 
 # Config
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
