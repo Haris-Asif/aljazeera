@@ -9,103 +9,105 @@ st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 SPREADSHEET_NAME = "Al Jazeera Real Estate & Developers"
 WORKSHEET_NAME = "Plots_Sale"
 
-# Load fresh data each time
+REQUIRED_DISPLAY_COLS = [
+    "Date", "Sector", "Street#", "Plot No#", "Plot Size",
+    "Demand/Price", "Description/Details", "Contact"
+]
+
+# Load fresh data every time
 def load_data_from_gsheet():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = st.secrets["gcp_service_account"]
-    credentials = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(credentials)
-    sheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
-    data = sheet.get_all_records()
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    worksheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
+    data = worksheet.get_all_records()
     return pd.DataFrame(data)
 
-def sector_matches(filter_val, cell_val):
-    if not filter_val:
+def sector_matches(user_input, cell_val):
+    if not user_input:
         return True
-    f = filter_val.replace(" ", "").upper()
-    c = str(cell_val).replace(" ", "").upper()
-    if "/" in f:
-        return f == c
-    return f in c
+    user_input = user_input.replace(" ", "").upper()
+    cell_val = cell_val.replace(" ", "").upper()
+    if "/" in user_input:
+        return user_input == cell_val
+    return user_input in cell_val
 
-def add_contact_ui(df):
+def generate_whatsapp_message(df):
+    grouped_msgs = {}
+    for _, row in df.iterrows():
+        sector = str(row["Sector"]).strip().upper()
+        plot_size = str(row["Plot Size"]).strip()
+        plot_no = str(row["Plot No#"]).strip()
+        price = str(row["Demand/Price"]).strip()
+        street = str(row["Street#"]).strip()
+
+        key = f"{sector}__{plot_size}"
+        grouped_msgs.setdefault(key, []).append((plot_no, plot_size, price, street))
+
+    message = ""
+    for key in sorted(grouped_msgs.keys()):
+        sector, size = key.split("__")
+        listings = grouped_msgs[key]
+
+        message += f"*Available Options in {sector} Size: {size}*\n"
+        for plot_no, plot_size, price, street in listings:
+            if "I-15" in sector:
+                message += f"St: {street} | P: {plot_no} | S: {plot_size} | D: {price}\n"
+            else:
+                message += f"P: {plot_no} | S: {plot_size} | D: {price}\n"
+        message += "\n"
+    return message.strip()
+
+def contact_ui(df):
     st.subheader("➕ Add Contact")
     new_name = st.text_input("Name")
     new_number = st.text_input("Phone Number")
     if st.button("Save Contact"):
         if new_name and new_number:
-            st.session_state["contacts"][new_name] = new_number
-            st.success(f"Saved contact: {new_name} -> {new_number}")
+            st.session_state.contacts[new_name] = new_number
+            st.success(f"Saved: {new_name} -> {new_number}")
         else:
             st.warning("Enter both name and number!")
 
-    st.subheader("🔍 Search Listings by Contact")
-    search_name = st.text_input("Search by Contact Name")
-    if search_name and search_name in st.session_state["contacts"]:
-        search_number = st.session_state["contacts"][search_name]
-        results = df[df["Contact"].astype(str).str.contains(search_number, na=False)]
-        st.write(f"Results for {search_name}:")
-        st.dataframe(results)
-    elif search_name:
-        st.warning("Contact not found.")
-
-def generate_whatsapp_message(df):
-    grouped = {}
-    for _, row in df.iterrows():
-        sector = str(row.get("Sector", "")).strip()
-        plot_size = str(row.get("Plot Size", "")).strip()
-        plot_no = str(row.get("Plot No#", "")).strip()
-        price = str(row.get("Demand/Price", "")).strip()
-        street = str(row.get("Street#", "")).strip()
-
-        group_key = f"{sector}__{plot_size}"
-        if group_key not in grouped:
-            grouped[group_key] = []
-        grouped[group_key].append((plot_no, plot_size, price, street, sector))
-
-    msg = ""
-    for key in sorted(grouped.keys()):
-        sector, size = key.split("__")
-        listings = grouped[key]
-        msg += f"*Available Options in {sector} Size: {size}*\n"
-        for p, s, d, st_, sec in listings:
-            if "I-15" in sec:
-                msg += f"St: {st_} | P: {p} | S: {s} | D: {d}\n"
-            else:
-                msg += f"P: {p} | S: {s} | D: {d}\n"
-        msg += "\n"
-    return msg.strip()
+    st.subheader("🔍 Search by Contact")
+    search_name = st.text_input("Search Contact Name")
+    if search_name:
+        if search_name in st.session_state.contacts:
+            phone = st.session_state.contacts[search_name]
+            results = df[df["Contact"].astype(str).str.contains(phone)]
+            st.dataframe(results)
+        else:
+            st.warning("Contact not found.")
 
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
     if "contacts" not in st.session_state:
-        st.session_state["contacts"] = {}
+        st.session_state.contacts = {}
 
     try:
         df = load_data_from_gsheet()
+        df = df.fillna("")
     except Exception as e:
-        st.error(f"Failed to load data from Google Sheet: {e}")
+        st.error(f"Failed to load Google Sheet: {e}")
         return
 
-    df = df.fillna("")
-    st.caption(f"✅ Total listings loaded: {len(df)}")
-
     with st.sidebar:
-        st.subheader("🔍 Filters")
-        st.markdown("Enter Sector like `I-14`, `I-14/1`, etc.")
+        st.subheader("🔎 Filters")
+        st.markdown("**Sector (e.g. I-14 or I-14/1)**")
         sector_filter = st.text_input("Sector")
-        st.markdown("Format: `25x50`, `30x60`, etc.")
+        st.markdown("**Plot Size (e.g. 25x50)**")
         plot_size_filter = st.text_input("Plot Size")
         street_filter = st.text_input("Street#")
         plot_no_filter = st.text_input("Plot No#")
-        contact_filter = st.text_input("Contact Number")
+        contact_filter = st.text_input("Contact")
 
-    # Apply filters
+    # Filtering
     df_filtered = df.copy()
 
     if sector_filter:
-        df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
+        df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, str(x)))]
 
     if plot_size_filter:
         df_filtered = df_filtered[df_filtered["Plot Size"].str.contains(plot_size_filter, case=False, na=False)]
@@ -119,28 +121,20 @@ def main():
     if contact_filter:
         df_filtered = df_filtered[df_filtered["Contact"].astype(str).str.contains(contact_filter, case=False, na=False)]
 
-    # Drop duplicate listings based on main fields
-    df_filtered = df_filtered.replace("", None)
+    # Deduplicate before WhatsApp message
     df_filtered = df_filtered.drop_duplicates(subset=["Sector", "Plot No#", "Plot Size", "Street#", "Demand/Price"])
 
-    # Display listings
     st.subheader("📋 Filtered Listings")
-    display_cols = ["Date", "Sector", "Street#", "Plot No#", "Plot Size", "Demand/Price", "Description/Details", "Contact"]
-    if not df_filtered.empty:
-        st.dataframe(df_filtered[display_cols])
-    else:
-        st.warning("No listings found with selected filters.")
+    st.dataframe(df_filtered[REQUIRED_DISPLAY_COLS])
 
-    # Generate WhatsApp message
     if st.button("📤 Generate WhatsApp Message"):
         if df_filtered.empty:
-            st.warning("No listings to include.")
+            st.warning("No listings available for message.")
         else:
             msg = generate_whatsapp_message(df_filtered)
             st.text_area("📄 WhatsApp Message", msg, height=300)
 
-    # Contact logic
-    add_contact_ui(df)
+    contact_ui(df)
 
 if __name__ == "__main__":
     main()
