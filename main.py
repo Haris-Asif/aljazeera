@@ -20,7 +20,7 @@ def load_data_from_gsheet():
     credentials = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(credentials)
     sheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
-    rows = sheet.get_all_values()[10928:]  # Row 10929 is header
+    rows = sheet.get_all_values()[0:]  # Row 10929 is header
     df = pd.DataFrame(rows[1:], columns=rows[0])
     return df
 
