@@ -36,8 +36,8 @@ def load_data_from_gsheet():
     client = gspread.authorize(credentials)
     sheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
     data = sheet.get_all_values()
-    headers = data[10928]  # Row 10929 = index 10928
-    rows = data[10929:]
+    headers = data[1]  # Row 10929 = index 10928
+    rows = data[2:]
     df = pd.DataFrame(rows, columns=headers)
     return df
 
