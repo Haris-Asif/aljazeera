@@ -5,11 +5,13 @@ import re
 from datetime import datetime, timedelta
 from oauth2client.service_account import ServiceAccountCredentials
 
+# Setup
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
 SPREADSHEET_NAME = "RealEstateTool"
 WORKSHEET_NAME = "Sheet1"
 CONTACTS_CSV = "contacts.csv"
+REQUIRED_COLUMNS = ["Sector", "Street#", "Plot No#", "Plot Size", "Demand/Price"]
 
 # Load data from Google Sheet
 def load_data_from_gsheet():
@@ -19,54 +21,32 @@ def load_data_from_gsheet():
     client = gspread.authorize(creds)
     sheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
     data = sheet.get_all_records()
-    return pd.DataFrame(data).fillna("")
+    return pd.DataFrame(data)
 
-# Helper functions
-def clean_number(num):
-    return re.sub(r"[^\d]", "", str(num))
-
+# Sector filter logic
 def sector_matches(filter_val, cell_val):
     if not filter_val:
         return True
     f = filter_val.replace(" ", "").upper()
     c = str(cell_val).replace(" ", "").upper()
-    return f in c if "/" not in f else f == c
+    if "/" in f:
+        return f == c
+    return f in c
 
-def parse_date(val):
-    try:
-        return datetime.strptime(val.strip(), "%Y-%m-%d, %H:%M")
-    except:
-        try:
-            return datetime.strptime(val.strip(), "%Y-%m-%d")
-        except:
-            return None
+# Clean phone numbers for matching (remove dashes etc)
+def clean_number(num):
+    return re.sub(r"[^\d]", "", str(num))
 
-def filter_by_date(df, days_label):
-    if days_label == "All":
-        return df
-    today = datetime.today()
-    days_map = {"Last 7 Days": 7, "Last 15 Days": 15, "Last 30 Days": 30, "Last 2 Months": 60}
-    cutoff = today - timedelta(days=days_map.get(days_label, 0))
-    df["ParsedDate"] = df["Date"].apply(parse_date)
-    return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
-
-# Load contacts
-def load_contacts():
-    try:
-        return pd.read_csv(CONTACTS_CSV)
-    except:
-        return pd.DataFrame(columns=["Name", "Contact1", "Contact2", "Contact3"])
-
-# Format WhatsApp message, split by sector+size if long
-def generate_whatsapp_messages(df):
+# WhatsApp message formatter
+def generate_whatsapp_message(df):
     filtered = []
 
     for _, row in df.iterrows():
-        sector = row.get("Sector", "").strip()
-        plot_no = row.get("Plot No#", "").strip()
-        plot_size = row.get("Plot Size", "").strip()
-        demand = row.get("Demand/Price", "").strip()
-        street = row.get("Street#", "").strip()
+        sector = str(row.get("Sector", "")).strip()
+        plot_no = str(row.get("Plot No#", "")).strip()
+        plot_size = str(row.get("Plot Size", "")).strip()
+        demand = str(row.get("Demand/Price", "")).strip()
+        street = str(row.get("Street#", "")).strip()
 
         if not re.match(r"^[A-Z]-\d+/\d+$", sector):
             continue
@@ -98,133 +78,166 @@ def generate_whatsapp_messages(df):
             seen.add(key)
             unique.append(row)
 
-    # Group by Sector + Plot Size
+    # Group and format
+    msg = ""
     grouped = {}
     for row in unique:
         key = (row["Sector"], row["Plot Size"])
         grouped.setdefault(key, []).append(row)
 
-    messages = []
-    current_msg = ""
-    for (sector, size), rows in sorted(grouped.items()):
-        header = f"*Available Options in {sector} Size: {size}*\n"
-        body = ""
-        for row in rows:
+    for (sector, size), items in sorted(grouped.items()):
+        msg += f"*Available Options in {sector} Size: {size}*\n"
+        for row in items:
             if sector.startswith("I-15/"):
-                body += f"St: {row['Street#']} | P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
+                msg += f"St: {row['Street#']} | P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
             else:
-                body += f"P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
-        section = header + body + "\n"
+                msg += f"P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
+        msg += "\n"
 
-        if len(current_msg + section) > 3900:
-            messages.append(current_msg.strip())
-            current_msg = section
-        else:
-            current_msg += section
+    return msg.strip()
 
-    if current_msg:
-        messages.append(current_msg.strip())
+# Apply date range filter
+def filter_by_date(df, days_label):
+    if days_label == "All":
+        return df
+    today = datetime.today()
+    days_map = {
+        "Last 7 Days": 7,
+        "Last 15 Days": 15,
+        "Last 30 Days": 30,
+        "Last 2 Months": 60
+    }
+    days = days_map.get(days_label, 0)
+    if days == 0:
+        return df
 
-    return messages
+    cutoff = today - timedelta(days=days)
+    def parse_date(val):
+        try:
+            return datetime.strptime(val.strip(), "%Y-%m-%d, %H:%M")
+        except:
+            try:
+                return datetime.strptime(val.strip(), "%Y-%m-%d")
+            except:
+                return None
 
-# Streamlit UI
+    df["ParsedDate"] = df["Date"].apply(parse_date)
+    return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
+
+# Load contacts
+def load_contacts():
+    try:
+        return pd.read_csv(CONTACTS_CSV)
+    except:
+        return pd.DataFrame(columns=["Name", "Contact1", "Contact2", "Contact3"])
+
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
+
     df = load_data_from_gsheet()
+    df = df.fillna("")
+
     contacts_df = load_contacts()
 
     with st.sidebar:
         st.header("🔍 Filters")
-        sector_filter = st.text_input("Sector")
-        plot_size_filter = st.text_input("Plot Size")
+        sector_filter = st.text_input("Sector (e.g. I-14/1 or I-14)")
+        plot_size_filter = st.text_input("Plot Size (e.g. 25x50)")
         street_filter = st.text_input("Street#")
         plot_no_filter = st.text_input("Plot No#")
         contact_filter = st.text_input("Contact Number")
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
+
         st.markdown("---")
-        saved_names = [""] + sorted(contacts_df["Name"].dropna().unique())
-        selected_name = st.selectbox("📇 Saved Contacts", saved_names)
+        contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
+        selected_name = st.selectbox("📇 Saved Contacts", contact_names)
 
     df_filtered = df.copy()
 
-    # Apply contact filter from saved contact selection
+    # Saved contact filter (to filter listings)
     if selected_name:
         contact_row = contacts_df[contacts_df["Name"] == selected_name]
         nums = []
         for col in ["Contact1", "Contact2", "Contact3"]:
-            if col in contact_row and pd.notna(contact_row[col].values[0]):
-                num = clean_number(contact_row[col].values[0])
-                if num:
-                    nums.append(num)
+            if col in contact_row.columns:
+                val = contact_row[col].values[0]
+                if pd.notna(val) and str(val).strip():
+                    nums.append(clean_number(val))
 
         if nums:
-            df_filtered = df_filtered[df_filtered["Contact"].astype(str).apply(
-                lambda x: any(n in clean_number(x) for n in nums)
-            )]
+            df_filtered = df_filtered[df_filtered["Contact"].astype(str).apply(lambda x: any(n in clean_number(x) for n in nums))]
 
     # Other filters
     if sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
+
     if plot_size_filter:
         df_filtered = df_filtered[df_filtered["Plot Size"].str.contains(plot_size_filter, case=False, na=False)]
+
     if street_filter:
         df_filtered = df_filtered[df_filtered["Street#"].str.contains(street_filter, case=False, na=False)]
+
     if plot_no_filter:
         df_filtered = df_filtered[df_filtered["Plot No#"].astype(str).str.contains(plot_no_filter, case=False, na=False)]
+
     if contact_filter:
-        c = clean_number(contact_filter)
-        df_filtered = df_filtered[df_filtered["Contact"].astype(str).apply(lambda x: c in clean_number(x))]
+        contact_clean = clean_number(contact_filter)
+        df_filtered = df_filtered[df_filtered["Contact"].astype(str).apply(lambda x: contact_clean in clean_number(x))]
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
-    # Show results
+    # Show filtered data
     st.subheader("📋 Filtered Listings")
     st.dataframe(df_filtered.drop(columns=["ParsedDate"], errors="ignore"))
 
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
 
-    wa_number_input = st.text_input("📱 Enter WhatsApp Number (03xxxxxxxxx)")
-    wa_contact_name = st.selectbox("📇 Or select saved contact to send message", saved_names)
+    col1, col2 = st.columns([3, 2])
+    with col1:
+        number = st.text_input("Enter WhatsApp Number (e.g. 03xxxxxxxxx)")
+    with col2:
+        wa_contact = st.selectbox("Or select saved contact", [""] + list(contacts_df["Name"].dropna().unique()))
 
-    wa_number = None
-    if wa_contact_name:
-        row = contacts_df[contacts_df["Name"] == wa_contact_name]
+    final_number = ""
+    if number and number.strip().startswith("03"):
+        final_number = number.strip()
+    elif wa_contact:
+        row = contacts_df[contacts_df["Name"] == wa_contact]
         if not row.empty:
-            wa_number = clean_number(row["Contact1"].values[0])
-    elif wa_number_input:
-        wa_number = clean_number(wa_number_input)
+            raw_number = row["Contact1"].values[0]
+            final_number = clean_number(raw_number)
 
     if st.button("Generate WhatsApp Message"):
-        if not wa_number or not wa_number.startswith("3"):
-            st.error("❌ Enter a valid number or select a valid saved contact.")
+        if not final_number:
+            st.error("❌ Please enter a valid number or select a saved contact.")
         else:
-            messages = generate_whatsapp_messages(df_filtered)
-            if not messages:
-                st.warning("⚠️ No valid listings to include.")
+            msg = generate_whatsapp_message(df_filtered)
+            if not msg:
+                st.warning("⚠️ No valid listings to include in WhatsApp message.")
             else:
-                st.success("✅ Message(s) Ready:")
-                for i, msg in enumerate(messages, 1):
-                    link = f"https://wa.me/92{wa_number}?text={msg.replace(' ', '%20').replace('\n', '%0A')}"
-                    st.markdown(f"[📩 Send Message {i} on WhatsApp]({link})", unsafe_allow_html=True)
+                wa_number = "92" + clean_number(final_number).lstrip("0")
+                link = f"https://wa.me/{wa_number}?text={msg.replace(' ', '%20').replace('\n', '%0A')}"
+                st.success("✅ Message Ready!")
+                st.markdown(f"[📩 Send Message on WhatsApp]({link})", unsafe_allow_html=True)
 
-    # Add new contact
+    # Contact form
     st.markdown("---")
     st.subheader("➕ Add New Contact")
-    with st.form("add_contact_form"):
+    with st.form("add_contact"):
         name = st.text_input("Name*", key="name")
         c1 = st.text_input("Contact1*", key="c1")
         c2 = st.text_input("Contact2", key="c2")
         c3 = st.text_input("Contact3", key="c3")
-        save = st.form_submit_button("Save Contact")
-        if save:
+        submitted = st.form_submit_button("Save Contact")
+        if submitted:
             if name and c1:
                 new_row = pd.DataFrame([[name, c1, c2, c3]], columns=["Name", "Contact1", "Contact2", "Contact3"])
-                updated = pd.concat([contacts_df, new_row], ignore_index=True)
-                updated.to_csv(CONTACTS_CSV, index=False)
-                st.success(f"✅ Contact '{name}' saved.")
+                updated_df = pd.concat([contacts_df, new_row], ignore_index=True)
+                updated_df.to_csv(CONTACTS_CSV, index=False)
+                st.success(f"Contact '{name}' saved.")
             else:
-                st.warning("❗ Name and Contact1 are required.")
+                st.warning("Name and Contact1 are required.")
 
 if __name__ == "__main__":
     main()
