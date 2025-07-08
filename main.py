@@ -8,8 +8,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 # Setup
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
-SPREADSHEET_NAME = "Al Jazeera Real Estate & Developers"
-WORKSHEET_NAME = "Plots_Sale"
+SPREADSHEET_NAME = "RealEstateTool"
+WORKSHEET_NAME = "Sheet1"
 CONTACTS_CSV = "contacts.csv"
 REQUIRED_COLUMNS = ["Sector", "Street#", "Plot No#", "Plot Size", "Demand/Price"]
 
