@@ -194,18 +194,33 @@ def main():
     st.subheader("📤 Send WhatsApp Message")
 
     number = st.text_input("Enter WhatsApp Number (e.g. 03xxxxxxxxx)")
+    saved_names = [""] + list(contacts_df["Name"].dropna().unique())
+    selected_contact = st.selectbox("Or select a saved contact", saved_names, key="send_contact")
+
     if st.button("Generate WhatsApp Message"):
-        if not number or not number.strip().startswith("03"):
-            st.error("❌ Please enter a valid number starting with 03...")
+        msg = generate_whatsapp_message(df_filtered)
+
+        if not msg:
+            st.warning("⚠️ No valid listings to include in WhatsApp message.")
         else:
-            msg = generate_whatsapp_message(df_filtered)
-            if not msg:
-                st.warning("⚠️ No valid listings to include in WhatsApp message.")
-            else:
-                wa_number = "92" + clean_number(number).lstrip("0")
+            target_number = None
+
+            if selected_contact:
+                contact_row = contacts_df[contacts_df["Name"] == selected_contact]
+                if not contact_row.empty:
+                    raw_num = contact_row.iloc[0]["Contact1"]
+                    if pd.notna(raw_num) and str(raw_num).strip():
+                        target_number = clean_number(str(raw_num))
+            elif number and number.strip().startswith("03"):
+                target_number = clean_number(number)
+
+            if target_number:
+                wa_number = "92" + target_number.lstrip("0")
                 link = f"https://wa.me/{wa_number}?text={msg.replace(' ', '%20').replace('\n', '%0A')}"
-                st.success("✅ Message Ready!")
+                st.success(f"✅ Message ready to send to {selected_contact or number}")
                 st.markdown(f"[📩 Send Message on WhatsApp]({link})", unsafe_allow_html=True)
+            else:
+                st.error("❌ Please provide a valid number or select a valid saved contact.")
 
     # Contact form
     st.markdown("---")
