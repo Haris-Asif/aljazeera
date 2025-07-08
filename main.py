@@ -88,7 +88,7 @@ def generate_whatsapp_message(df):
     for (sector, size), items in sorted(grouped.items()):
         msg += f"*Available Options in {sector} Size: {size}*\n"
         for row in items:
-            if "I-15/" in sector:
+            if sector.startswith("I-15/"):
                 msg += f"St: {row['Street#']} | P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
             else:
                 msg += f"P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
@@ -154,7 +154,7 @@ def main():
 
     df_filtered = df.copy()
 
-    # Saved contact filter
+    # Saved contact filter (to filter listings)
     if selected_name:
         contact_row = contacts_df[contacts_df["Name"] == selected_name]
         nums = []
@@ -193,34 +193,33 @@ def main():
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
 
-    number = st.text_input("Enter WhatsApp Number (e.g. 03xxxxxxxxx)")
-    saved_names = [""] + list(contacts_df["Name"].dropna().unique())
-    selected_contact = st.selectbox("Or select a saved contact", saved_names, key="send_contact")
+    col1, col2 = st.columns([3, 2])
+    with col1:
+        number = st.text_input("Enter WhatsApp Number (e.g. 03xxxxxxxxx)")
+    with col2:
+        wa_contact = st.selectbox("Or select saved contact", [""] + list(contacts_df["Name"].dropna().unique()))
+
+    final_number = ""
+    if number and number.strip().startswith("03"):
+        final_number = number.strip()
+    elif wa_contact:
+        row = contacts_df[contacts_df["Name"] == wa_contact]
+        if not row.empty:
+            raw_number = row["Contact1"].values[0]
+            final_number = clean_number(raw_number)
 
     if st.button("Generate WhatsApp Message"):
-        msg = generate_whatsapp_message(df_filtered)
-
-        if not msg:
-            st.warning("⚠️ No valid listings to include in WhatsApp message.")
+        if not final_number:
+            st.error("❌ Please enter a valid number or select a saved contact.")
         else:
-            target_number = None
-
-            if selected_contact:
-                contact_row = contacts_df[contacts_df["Name"] == selected_contact]
-                if not contact_row.empty:
-                    raw_num = contact_row.iloc[0]["Contact1"]
-                    if pd.notna(raw_num) and str(raw_num).strip():
-                        target_number = clean_number(str(raw_num))
-            elif number and number.strip().startswith("03"):
-                target_number = clean_number(number)
-
-            if target_number:
-                wa_number = "92" + target_number.lstrip("0")
-                link = f"https://wa.me/{wa_number}?text={msg.replace(' ', '%20').replace('\n', '%0A')}"
-                st.success(f"✅ Message ready to send to {selected_contact or number}")
-                st.markdown(f"[📩 Send Message on WhatsApp]({link})", unsafe_allow_html=True)
+            msg = generate_whatsapp_message(df_filtered)
+            if not msg:
+                st.warning("⚠️ No valid listings to include in WhatsApp message.")
             else:
-                st.error("❌ Please provide a valid number or select a valid saved contact.")
+                wa_number = "92" + clean_number(final_number).lstrip("0")
+                link = f"https://wa.me/{wa_number}?text={msg.replace(' ', '%20').replace('\n', '%0A')}"
+                st.success("✅ Message Ready!")
+                st.markdown(f"[📩 Send Message on WhatsApp]({link})", unsafe_allow_html=True)
 
     # Contact form
     st.markdown("---")
