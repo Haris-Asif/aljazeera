@@ -11,7 +11,6 @@ st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 SPREADSHEET_NAME = "RealEstateTool"
 WORKSHEET_NAME = "Sheet1"
 CONTACTS_CSV = "contacts.csv"
-REQUIRED_COLUMNS = ["Sector", "Street#", "Plot No#", "Plot Size", "Demand/Price"]
 
 # Load data from Google Sheet
 def load_data_from_gsheet():
@@ -33,11 +32,11 @@ def sector_matches(filter_val, cell_val):
         return f == c
     return f in c
 
-# Clean phone numbers for matching (remove dashes etc)
+# Clean phone numbers
 def clean_number(num):
     return re.sub(r"[^\d]", "", str(num))
 
-# WhatsApp message formatter
+# Generate WhatsApp message
 def generate_whatsapp_message(df):
     filtered = []
 
@@ -50,7 +49,7 @@ def generate_whatsapp_message(df):
 
         if not re.match(r"^[A-Z]-\d+/\d+$", sector):
             continue
-        if not (sector and plot_no and plot_size and demand):
+        if not all([sector, plot_no, plot_size, demand]):
             continue
         if sector in ["I-15/1", "I-15/2", "I-15/3", "I-15/4"] and not street:
             continue
@@ -78,7 +77,7 @@ def generate_whatsapp_message(df):
             seen.add(key)
             unique.append(row)
 
-    # Group by (Sector, Plot Size) and sort by Plot No#
+    # Group and sort
     grouped = {}
     for row in unique:
         key = (row["Sector"], row["Plot Size"])
@@ -86,17 +85,17 @@ def generate_whatsapp_message(df):
 
     msg = ""
     for (sector, size), items in sorted(grouped.items()):
-        # Sort by numeric part of Plot No# if possible
         def extract_plot_number(val):
             try:
                 return int(re.search(r"\d+", str(val)).group())
             except:
                 return float('inf')
+
         sorted_items = sorted(items, key=lambda x: extract_plot_number(x["Plot No#"]))
 
         msg += f"*Available Options in {sector} Size: {size}*\n"
         for row in sorted_items:
-            if "I-15/" in sector:
+            if sector in ["I-15/1", "I-15/2", "I-15/3", "I-15/4"]:
                 msg += f"St: {row['Street#']} | P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
             else:
                 msg += f"P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
@@ -104,7 +103,7 @@ def generate_whatsapp_message(df):
 
     return msg.strip()
 
-# Apply date range filter
+# Date filter
 def filter_by_date(df, days_label):
     if days_label == "All":
         return df
@@ -133,7 +132,7 @@ def filter_by_date(df, days_label):
     df["ParsedDate"] = df["Date"].apply(parse_date)
     return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
 
-# Load contacts
+# Load saved contacts
 def load_contacts():
     try:
         return pd.read_csv(CONTACTS_CSV)
@@ -144,9 +143,7 @@ def load_contacts():
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
-    df = load_data_from_gsheet()
-    df = df.fillna("")
-
+    df = load_data_from_gsheet().fillna("")
     contacts_df = load_contacts()
 
     # Sidebar Filters
@@ -159,7 +156,6 @@ def main():
         contact_filter = st.text_input("Contact Number")
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
-        # Dealer Name Autocomplete (if column exists)
         dealer_filter = ""
         if "Dealer Name" in df.columns:
             dealer_names = sorted(df["Dealer Name"].dropna().unique())
@@ -171,7 +167,7 @@ def main():
 
     df_filtered = df.copy()
 
-    # Saved contact filter
+    # Saved contact filtering
     if selected_name:
         contact_row = contacts_df[contacts_df["Name"] == selected_name]
         nums = []
@@ -186,35 +182,30 @@ def main():
                 lambda x: any(n in clean_number(x) for n in nums)
             )]
 
-    # Other filters
+    # Field filters
     if sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
-
     if plot_size_filter:
         df_filtered = df_filtered[df_filtered["Plot Size"].str.contains(plot_size_filter, case=False, na=False)]
-
     if street_filter:
         df_filtered = df_filtered[df_filtered["Street#"].str.contains(street_filter, case=False, na=False)]
-
     if plot_no_filter:
         df_filtered = df_filtered[df_filtered["Plot No#"].astype(str).str.contains(plot_no_filter, case=False, na=False)]
-
     if contact_filter:
         contact_clean = clean_number(contact_filter)
         df_filtered = df_filtered[df_filtered["Contact"].astype(str).apply(lambda x: contact_clean in clean_number(x))]
-
     if dealer_filter and "Dealer Name" in df_filtered.columns:
         df_filtered = df_filtered[df_filtered["Dealer Name"].astype(str).str.contains(dealer_filter, case=False, na=False)]
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
-    # Display Filtered Listings
+    # Display Data
     st.subheader("📋 Filtered Listings")
     st.dataframe(df_filtered.drop(columns=["ParsedDate"], errors="ignore"))
 
+    # WhatsApp Message Section
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
-
     number = st.text_input("Enter WhatsApp Number (e.g. 03xxxxxxxxx)")
     if st.button("Generate WhatsApp Message"):
         if not number or not number.strip().startswith("03"):
