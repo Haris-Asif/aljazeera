@@ -11,7 +11,6 @@ st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 SPREADSHEET_NAME = "RealEstateTool"
 WORKSHEET_NAME = "Sheet1"
 CONTACTS_CSV = "contacts.csv"
-REQUIRED_COLUMNS = ["Sector", "Street#", "Plot No#", "Plot Size", "Demand/Price"]
 
 # Load data from Google Sheet
 def load_data_from_gsheet():
@@ -33,14 +32,49 @@ def sector_matches(filter_val, cell_val):
         return f == c
     return f in c
 
-# Clean phone numbers for matching (remove dashes etc)
+# Clean phone number
 def clean_number(num):
     return re.sub(r"[^\d]", "", str(num))
+
+# Apply date range filter
+def filter_by_date(df, days_label):
+    if days_label == "All":
+        return df
+    today = datetime.today()
+    days_map = {
+        "Last 7 Days": 7,
+        "Last 15 Days": 15,
+        "Last 30 Days": 30,
+        "Last 2 Months": 60
+    }
+    days = days_map.get(days_label, 0)
+    if days == 0:
+        return df
+
+    cutoff = today - timedelta(days=days)
+
+    def parse_date(val):
+        try:
+            return datetime.strptime(val.strip(), "%Y-%m-%d, %H:%M")
+        except:
+            try:
+                return datetime.strptime(val.strip(), "%Y-%m-%d")
+            except:
+                return None
+
+    df["ParsedDate"] = df["Date"].apply(parse_date)
+    return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
+
+# Sort key for Plot No#
+def sort_key(row):
+    try:
+        return (0, int(re.findall(r'\d+', row.get("Plot No#", ""))[0]))
+    except:
+        return (1, row.get("Plot No#", ""))
 
 # WhatsApp message formatter
 def generate_whatsapp_message(df):
     filtered = []
-
     for _, row in df.iterrows():
         sector = str(row.get("Sector", "")).strip()
         plot_no = str(row.get("Plot No#", "")).strip()
@@ -78,7 +112,7 @@ def generate_whatsapp_message(df):
             seen.add(key)
             unique.append(row)
 
-    # Group and format
+    # Group and sort by Plot No#
     msg = ""
     grouped = {}
     for row in unique:
@@ -86,8 +120,9 @@ def generate_whatsapp_message(df):
         grouped.setdefault(key, []).append(row)
 
     for (sector, size), items in sorted(grouped.items()):
+        items_sorted = sorted(items, key=sort_key)
         msg += f"*Available Options in {sector} Size: {size}*\n"
-        for row in items:
+        for row in items_sorted:
             if "I-15/" in sector:
                 msg += f"St: {row['Street#']} | P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
             else:
@@ -95,35 +130,6 @@ def generate_whatsapp_message(df):
         msg += "\n"
 
     return msg.strip()
-
-# Apply date range filter
-def filter_by_date(df, days_label):
-    if days_label == "All":
-        return df
-    today = datetime.today()
-    days_map = {
-        "Last 7 Days": 7,
-        "Last 15 Days": 15,
-        "Last 30 Days": 30,
-        "Last 2 Months": 60
-    }
-    days = days_map.get(days_label, 0)
-    if days == 0:
-        return df
-
-    cutoff = today - timedelta(days=days)
-
-    def parse_date(val):
-        try:
-            return datetime.strptime(val.strip(), "%Y-%m-%d, %H:%M")
-        except:
-            try:
-                return datetime.strptime(val.strip(), "%Y-%m-%d")
-            except:
-                return None
-
-    df["ParsedDate"] = df["Date"].apply(parse_date)
-    return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
 
 # Load contacts
 def load_contacts():
@@ -141,7 +147,6 @@ def main():
 
     contacts_df = load_contacts()
 
-    # Sidebar Filters
     with st.sidebar:
         st.header("🔍 Filters")
         sector_filter = st.text_input("Sector (e.g. I-14/1 or I-14)")
@@ -149,6 +154,7 @@ def main():
         street_filter = st.text_input("Street#")
         plot_no_filter = st.text_input("Plot No#")
         contact_filter = st.text_input("Contact Number")
+        dealer_filter = st.text_input("Dealer Name")
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
         st.markdown("---")
@@ -172,7 +178,7 @@ def main():
                 lambda x: any(n in clean_number(x) for n in nums)
             )]
 
-    # Other filters
+    # Text filters
     if sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
 
@@ -185,13 +191,16 @@ def main():
     if plot_no_filter:
         df_filtered = df_filtered[df_filtered["Plot No#"].astype(str).str.contains(plot_no_filter, case=False, na=False)]
 
+    if dealer_filter:
+        df_filtered = df_filtered[df_filtered["Dealer Name"].astype(str).str.contains(dealer_filter, case=False, na=False)]
+
     if contact_filter:
         contact_clean = clean_number(contact_filter)
         df_filtered = df_filtered[df_filtered["Contact"].astype(str).apply(lambda x: contact_clean in clean_number(x))]
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
-    # Display Filtered Listings
+    # Show filtered data
     st.subheader("📋 Filtered Listings")
     st.dataframe(df_filtered.drop(columns=["ParsedDate"], errors="ignore"))
 
