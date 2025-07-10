@@ -32,11 +32,87 @@ def sector_matches(filter_val, cell_val):
         return f == c
     return f in c
 
-# Clean phone numbers for matching
+# Clean phone numbers
 def clean_number(num):
     return re.sub(r"[^\d]", "", str(num))
 
-# Parse and filter by date
+# Split large WhatsApp message into chunks
+def split_message_chunks(message, limit=3900):
+    chunks = []
+    current = ""
+    for block in message.split("\n\n"):
+        block += "\n\n"
+        if len(current) + len(block) > limit:
+            chunks.append(current.strip())
+            current = block
+        else:
+            current += block
+    if current.strip():
+        chunks.append(current.strip())
+    return chunks
+
+# Generate WhatsApp message
+def generate_whatsapp_messages(df):
+    filtered = []
+
+    for _, row in df.iterrows():
+        sector = str(row.get("Sector", "")).strip()
+        plot_no = str(row.get("Plot No#", "")).strip()
+        plot_size = str(row.get("Plot Size", "")).strip()
+        demand = str(row.get("Demand/Price", "")).strip()
+        street = str(row.get("Street#", "")).strip()
+
+        # Validation
+        if not re.match(r"^[A-Z]-\d+/\d+$", sector):
+            continue
+        if not (sector and plot_no and plot_size and demand):
+            continue
+        if sector in ["I-15/1", "I-15/2", "I-15/3", "I-15/4"] and not street:
+            continue
+
+        filtered.append({
+            "Sector": sector,
+            "Street#": street,
+            "Plot No#": plot_no,
+            "Plot Size": plot_size,
+            "Demand/Price": demand
+        })
+
+    # Remove duplicates
+    seen = set()
+    unique = []
+    for row in filtered:
+        key = (
+            row["Sector"],
+            row["Plot No#"],
+            row["Plot Size"],
+            row["Demand/Price"],
+            row["Street#"] if row["Sector"] in ["I-15/1", "I-15/2", "I-15/3", "I-15/4"] else ""
+        )
+        if key not in seen:
+            seen.add(key)
+            unique.append(row)
+
+    # Group and format
+    grouped = {}
+    for row in unique:
+        key = (row["Sector"], row["Plot Size"])
+        grouped.setdefault(key, []).append(row)
+
+    full_msg = ""
+    for (sector, size), items in sorted(grouped.items()):
+        sorted_items = sorted(items, key=lambda x: str(x["Plot No#"]).strip().lower())
+        full_msg += f"*Available Options in {sector} Size: {size}*\n"
+        for row in sorted_items:
+            if "I-15/" in sector:
+                full_msg += f"St: {row['Street#']} | P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
+            else:
+                full_msg += f"P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
+        full_msg += "\n"
+
+    return split_message_chunks(full_msg.strip())
+
+# Filter by date
 def filter_by_date(df, days_label):
     if days_label == "All":
         return df
@@ -50,6 +126,7 @@ def filter_by_date(df, days_label):
     days = days_map.get(days_label, 0)
     if days == 0:
         return df
+
     cutoff = today - timedelta(days=days)
 
     def parse_date(val):
@@ -64,97 +141,20 @@ def filter_by_date(df, days_label):
     df["ParsedDate"] = df["Date"].apply(parse_date)
     return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
 
-# Load saved contacts
+# Load contacts
 def load_contacts():
     try:
         return pd.read_csv(CONTACTS_CSV)
     except:
         return pd.DataFrame(columns=["Name", "Contact1", "Contact2", "Contact3"])
 
-# WhatsApp Message Generator (with chunking)
-def generate_whatsapp_message(df):
-    filtered = []
-    i15_subsectors = ["I-15/1", "I-15/2", "I-15/3", "I-15/4"]
-
-    for _, row in df.iterrows():
-        sector = str(row.get("Sector", "")).strip().upper()
-        plot_no = str(row.get("Plot No#", "")).strip()
-        plot_size = str(row.get("Plot Size", "")).strip()
-        demand = str(row.get("Demand/Price", "")).strip()
-        street = str(row.get("Street#", "")).strip()
-
-        if not re.match(r"^[A-Z]-\d+/\d+$", sector):
-            continue
-        if not (sector and plot_no and plot_size and demand):
-            continue
-        if sector in i15_subsectors and not street:
-            continue
-
-        filtered.append({
-            "Sector": sector,
-            "Street#": street,
-            "Plot No#": plot_no,
-            "Plot Size": plot_size,
-            "Demand/Price": demand
-        })
-
-    # Deduplicate
-    seen = set()
-    unique = []
-    for row in filtered:
-        key = (
-            row["Sector"],
-            row["Plot No#"],
-            row["Plot Size"],
-            row["Demand/Price"],
-            row["Street#"] if row["Sector"] in i15_subsectors else ""
-        )
-        if key not in seen:
-            seen.add(key)
-            unique.append(row)
-
-    # Group by Sector + Size
-    grouped = {}
-    for row in unique:
-        key = (row["Sector"], row["Plot Size"])
-        grouped.setdefault(key, []).append(row)
-
-    def extract_plot_number(val):
-        try:
-            return int(re.search(r"\d+", str(val)).group())
-        except:
-            return float('inf')
-
-    # Split message chunks
-    chunks = []
-    current_chunk = ""
-
-    for (sector, size), items in sorted(grouped.items()):
-        sorted_items = sorted(items, key=lambda x: extract_plot_number(x["Plot No#"]))
-        group_text = f"*Available Options in {sector} Size: {size}*\n"
-        for row in sorted_items:
-            if sector in i15_subsectors:
-                group_text += f"St: {row['Street#']} | P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
-            else:
-                group_text += f"P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
-        group_text += "\n"
-
-        if len(current_chunk + group_text) > 3900:
-            chunks.append(current_chunk.strip())
-            current_chunk = group_text
-        else:
-            current_chunk += group_text
-
-    if current_chunk.strip():
-        chunks.append(current_chunk.strip())
-
-    return chunks
-
-# Main Streamlit App
+# Main App
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
-    df = load_data_from_gsheet().fillna("")
+    df = load_data_from_gsheet()
+    df = df.fillna("")
+
     contacts_df = load_contacts()
 
     # Sidebar Filters
@@ -167,6 +167,7 @@ def main():
         contact_filter = st.text_input("Contact Number")
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
+        # Dealer Name filter
         dealer_filter = ""
         if "Dealer Name" in df.columns:
             dealer_names = sorted(df["Dealer Name"].dropna().unique())
@@ -178,34 +179,43 @@ def main():
 
     df_filtered = df.copy()
 
-    # Saved contact filter
+    # Apply Saved Contact Filter
     if selected_name:
         contact_row = contacts_df[contacts_df["Name"] == selected_name]
-        nums = [clean_number(str(contact_row[col].values[0])) for col in ["Contact1", "Contact2", "Contact3"]
-                if col in contact_row.columns and pd.notna(contact_row[col].values[0])]
+        nums = []
+        for col in ["Contact1", "Contact2", "Contact3"]:
+            if col in contact_row.columns:
+                val = contact_row[col].values[0]
+                if pd.notna(val) and str(val).strip():
+                    nums.append(clean_number(val))
         if nums:
             df_filtered = df_filtered[df_filtered["Contact"].astype(str).apply(
                 lambda x: any(n in clean_number(x) for n in nums)
             )]
 
-    # Manual Filters
+    # Other filters
     if sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
+
     if plot_size_filter:
         df_filtered = df_filtered[df_filtered["Plot Size"].str.contains(plot_size_filter, case=False, na=False)]
+
     if street_filter:
         df_filtered = df_filtered[df_filtered["Street#"].str.contains(street_filter, case=False, na=False)]
+
     if plot_no_filter:
         df_filtered = df_filtered[df_filtered["Plot No#"].astype(str).str.contains(plot_no_filter, case=False, na=False)]
+
     if contact_filter:
         contact_clean = clean_number(contact_filter)
         df_filtered = df_filtered[df_filtered["Contact"].astype(str).apply(lambda x: contact_clean in clean_number(x))]
+
     if dealer_filter and "Dealer Name" in df_filtered.columns:
         df_filtered = df_filtered[df_filtered["Dealer Name"].astype(str).str.contains(dealer_filter, case=False, na=False)]
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
-    # Display Data
+    # Show filtered data
     st.subheader("📋 Filtered Listings")
     st.dataframe(df_filtered.drop(columns=["ParsedDate"], errors="ignore"))
 
@@ -217,17 +227,18 @@ def main():
         if not number or not number.strip().startswith("03"):
             st.error("❌ Please enter a valid number starting with 03...")
         else:
-            messages = generate_whatsapp_message(df_filtered)
+            messages = generate_whatsapp_messages(df_filtered)
             if not messages:
                 st.warning("⚠️ No valid listings to include in WhatsApp message.")
             else:
                 wa_number = "92" + clean_number(number).lstrip("0")
-                st.success(f"✅ {len(messages)} WhatsApp Message{'s' if len(messages) > 1 else ''} Ready!")
-                for i, msg in enumerate(messages, 1):
-                    link = f"https://wa.me/{wa_number}?text={msg.replace(' ', '%20').replace('\n', '%0A')}"
-                    st.markdown(f"[📩 Send Message {i} on WhatsApp]({link})", unsafe_allow_html=True)
+                st.success("✅ Message(s) Ready!")
+                for i, msg in enumerate(messages):
+                    encoded_msg = msg.replace(' ', '%20').replace('\n', '%0A')
+                    link = f"https://wa.me/{wa_number}?text={encoded_msg}"
+                    st.markdown(f"[📩 Message {i+1}]({link})", unsafe_allow_html=True)
 
-    # Add Contact
+    # Add Contact Form
     st.markdown("---")
     st.subheader("➕ Add New Contact")
     with st.form("add_contact"):
