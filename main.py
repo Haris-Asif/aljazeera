@@ -5,14 +5,14 @@ import re
 from datetime import datetime, timedelta
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Setup
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
-SPREADSHEET_NAME = "Al Jazeera Real Estate & Developers"
-WORKSHEET_NAME = "Plots_Sale"
+SPREADSHEET_NAME = "RealEstateTool"
+WORKSHEET_NAME = "Sheet1"
 CONTACTS_CSV = "contacts.csv"
 
-# Load data from Google Sheet
+# ---- Utility Functions ----
+
 def load_data_from_gsheet():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = st.secrets["gcp_service_account"]
@@ -22,7 +22,9 @@ def load_data_from_gsheet():
     data = sheet.get_all_records()
     return pd.DataFrame(data)
 
-# Sector filter logic
+def clean_number(num):
+    return re.sub(r"[^\d]", "", str(num))
+
 def sector_matches(filter_val, cell_val):
     if not filter_val:
         return True
@@ -32,27 +34,40 @@ def sector_matches(filter_val, cell_val):
         return f == c
     return f in c
 
-# Clean phone numbers
-def clean_number(num):
-    return re.sub(r"[^\d]", "", str(num))
+def filter_by_date(df, days_label):
+    if days_label == "All":
+        return df
+    today = datetime.today()
+    days_map = {
+        "Last 7 Days": 7,
+        "Last 15 Days": 15,
+        "Last 30 Days": 30,
+        "Last 2 Months": 60
+    }
+    days = days_map.get(days_label, 0)
+    cutoff = today - timedelta(days=days)
 
-# Split large WhatsApp message into chunks
-def split_message_chunks(message, limit=3900):
-    chunks = []
-    current = ""
-    for block in message.split("\n\n"):
-        block += "\n\n"
-        if len(current) + len(block) > limit:
-            chunks.append(current.strip())
-            current = block
-        else:
-            current += block
-    if current.strip():
-        chunks.append(current.strip())
-    return chunks
+    def parse_date(val):
+        try:
+            return datetime.strptime(val.strip(), "%Y-%m-%d, %H:%M")
+        except:
+            try:
+                return datetime.strptime(val.strip(), "%Y-%m-%d")
+            except:
+                return None
 
-# Generate WhatsApp message
-def generate_whatsapp_messages(df):
+    df["ParsedDate"] = df["Date"].apply(parse_date)
+    return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
+
+def load_contacts():
+    try:
+        return pd.read_csv(CONTACTS_CSV)
+    except:
+        return pd.DataFrame(columns=["Name", "Contact1", "Contact2", "Contact3"])
+
+# ---- WhatsApp Message Generator ----
+
+def generate_whatsapp_chunks(df, max_chars=3900):
     filtered = []
 
     for _, row in df.iterrows():
@@ -62,7 +77,6 @@ def generate_whatsapp_messages(df):
         demand = str(row.get("Demand/Price", "")).strip()
         street = str(row.get("Street#", "")).strip()
 
-        # Validation
         if not re.match(r"^[A-Z]-\d+/\d+$", sector):
             continue
         if not (sector and plot_no and plot_size and demand):
@@ -78,7 +92,6 @@ def generate_whatsapp_messages(df):
             "Demand/Price": demand
         })
 
-    # Remove duplicates
     seen = set()
     unique = []
     for row in filtered:
@@ -93,71 +106,51 @@ def generate_whatsapp_messages(df):
             seen.add(key)
             unique.append(row)
 
-    # Group and format
+    # Group and sort
     grouped = {}
     for row in unique:
         key = (row["Sector"], row["Plot Size"])
         grouped.setdefault(key, []).append(row)
 
-    full_msg = ""
+    chunks = []
+    current = ""
     for (sector, size), items in sorted(grouped.items()):
-        sorted_items = sorted(items, key=lambda x: str(x["Plot No#"]).strip().lower())
-        full_msg += f"*Available Options in {sector} Size: {size}*\n"
+        def extract_plot_number(val):
+            try:
+                return int(re.search(r"\d+", str(val)).group())
+            except:
+                return float('inf')
+
+        sorted_items = sorted(items, key=lambda x: extract_plot_number(x["Plot No#"]))
+        header = f"*Available Options in {sector} Size: {size}*\n"
+        lines = []
+
         for row in sorted_items:
             if "I-15/" in sector:
-                full_msg += f"St: {row['Street#']} | P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
+                lines.append(f"St: {row['Street#']} | P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}")
             else:
-                full_msg += f"P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}\n"
-        full_msg += "\n"
+                lines.append(f"P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}")
 
-    return split_message_chunks(full_msg.strip())
+        group_block = header + "\n".join(lines) + "\n\n"
+        if len(current + group_block) > max_chars:
+            chunks.append(current.strip())
+            current = group_block
+        else:
+            current += group_block
 
-# Filter by date
-def filter_by_date(df, days_label):
-    if days_label == "All":
-        return df
-    today = datetime.today()
-    days_map = {
-        "Last 7 Days": 7,
-        "Last 15 Days": 15,
-        "Last 30 Days": 30,
-        "Last 2 Months": 60
-    }
-    days = days_map.get(days_label, 0)
-    if days == 0:
-        return df
+    if current.strip():
+        chunks.append(current.strip())
 
-    cutoff = today - timedelta(days=days)
+    return chunks
 
-    def parse_date(val):
-        try:
-            return datetime.strptime(val.strip(), "%Y-%m-%d, %H:%M")
-        except:
-            try:
-                return datetime.strptime(val.strip(), "%Y-%m-%d")
-            except:
-                return None
+# ---- Streamlit UI ----
 
-    df["ParsedDate"] = df["Date"].apply(parse_date)
-    return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
-
-# Load contacts
-def load_contacts():
-    try:
-        return pd.read_csv(CONTACTS_CSV)
-    except:
-        return pd.DataFrame(columns=["Name", "Contact1", "Contact2", "Contact3"])
-
-# Main App
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
-    df = load_data_from_gsheet()
-    df = df.fillna("")
-
+    df = load_data_from_gsheet().fillna("")
     contacts_df = load_contacts()
 
-    # Sidebar Filters
     with st.sidebar:
         st.header("🔍 Filters")
         sector_filter = st.text_input("Sector (e.g. I-14/1 or I-14)")
@@ -165,35 +158,24 @@ def main():
         street_filter = st.text_input("Street#")
         plot_no_filter = st.text_input("Plot No#")
         contact_filter = st.text_input("Contact Number")
+        dealer_filter = st.text_input("Dealer Name")
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
-        # Dealer Name filter
-        dealer_filter = ""
-        if "Dealer Name" in df.columns:
-            dealer_names = sorted(df["Dealer Name"].dropna().unique())
-            dealer_filter = st.selectbox("Dealer Name", [""] + dealer_names)
-
-        st.markdown("---")
         contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
         selected_name = st.selectbox("📇 Saved Contacts", contact_names)
 
     df_filtered = df.copy()
 
-    # Apply Saved Contact Filter
     if selected_name:
         contact_row = contacts_df[contacts_df["Name"] == selected_name]
-        nums = []
-        for col in ["Contact1", "Contact2", "Contact3"]:
-            if col in contact_row.columns:
-                val = contact_row[col].values[0]
-                if pd.notna(val) and str(val).strip():
-                    nums.append(clean_number(val))
+        nums = [clean_number(contact_row[col].values[0])
+                for col in ["Contact1", "Contact2", "Contact3"]
+                if col in contact_row and pd.notna(contact_row[col].values[0])]
         if nums:
             df_filtered = df_filtered[df_filtered["Contact"].astype(str).apply(
                 lambda x: any(n in clean_number(x) for n in nums)
             )]
 
-    # Other filters
     if sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
 
@@ -215,7 +197,6 @@ def main():
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
-    # Show filtered data
     st.subheader("📋 Filtered Listings")
     st.dataframe(df_filtered.drop(columns=["ParsedDate"], errors="ignore"))
 
@@ -224,21 +205,18 @@ def main():
 
     number = st.text_input("Enter WhatsApp Number (e.g. 03xxxxxxxxx)")
     if st.button("Generate WhatsApp Message"):
-        if not number or not number.strip().startswith("03"):
-            st.error("❌ Please enter a valid number starting with 03...")
+        if not number.strip().startswith("03"):
+            st.error("❌ Enter a valid number starting with 03")
         else:
-            messages = generate_whatsapp_messages(df_filtered)
-            if not messages:
-                st.warning("⚠️ No valid listings to include in WhatsApp message.")
+            chunks = generate_whatsapp_chunks(df_filtered)
+            if not chunks:
+                st.warning("⚠️ No valid listings found.")
             else:
-                wa_number = "92" + clean_number(number).lstrip("0")
-                st.success("✅ Message(s) Ready!")
-                for i, msg in enumerate(messages):
-                    encoded_msg = msg.replace(' ', '%20').replace('\n', '%0A')
-                    link = f"https://wa.me/{wa_number}?text={encoded_msg}"
-                    st.markdown(f"[📩 Message {i+1}]({link})", unsafe_allow_html=True)
+                for i, msg in enumerate(chunks, 1):
+                    wa_number = "92" + clean_number(number).lstrip("0")
+                    url = f"https://wa.me/{wa_number}?text={msg.replace(' ', '%20').replace('\n', '%0A')}"
+                    st.markdown(f"[📩 Send Message {i}]({url})", unsafe_allow_html=True)
 
-    # Add Contact Form
     st.markdown("---")
     st.subheader("➕ Add New Contact")
     with st.form("add_contact"):
