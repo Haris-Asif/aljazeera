@@ -23,7 +23,7 @@ def load_data_from_gsheet():
     data = sheet.get_all_records()
     return pd.DataFrame(data)
 
-# Sector logic
+# Sector filter logic
 def sector_matches(filter_val, cell_val):
     if not filter_val:
         return True
@@ -47,7 +47,6 @@ def generate_whatsapp_messages(df):
         demand = str(row.get("Demand/Price", "")).strip()
         street = str(row.get("Street#", "")).strip()
 
-        # Validate format
         if not re.match(r"^[A-Z]-\d+/\d+$", sector):
             continue
         if not (sector and plot_no and plot_size and demand):
@@ -78,13 +77,13 @@ def generate_whatsapp_messages(df):
             seen.add(key)
             unique.append(row)
 
-    # Group by (Sector, Plot Size)
+    # Group by Sector & Plot Size
     grouped = {}
     for row in unique:
         key = (row["Sector"], row["Plot Size"])
         grouped.setdefault(key, []).append(row)
 
-    # Sort by Plot No#
+    # Sort and prepare chunks
     def extract_plot_number(val):
         try:
             return int(re.search(r"\d+", str(val)).group())
@@ -95,10 +94,10 @@ def generate_whatsapp_messages(df):
     current_msg = ""
 
     for (sector, size), items in sorted(grouped.items()):
-        items_sorted = sorted(items, key=lambda x: extract_plot_number(x["Plot No#"]))
+        sorted_items = sorted(items, key=lambda x: extract_plot_number(x["Plot No#"]))
         header = f"*Available Options in {sector} Size: {size}*\n"
         lines = []
-        for row in items_sorted:
+        for row in sorted_items:
             if "I-15/" in sector:
                 line = f"St: {row['Street#']} | P: {row['Plot No#']} | S: {row['Plot Size']} | D: {row['Demand/Price']}"
             else:
@@ -107,7 +106,7 @@ def generate_whatsapp_messages(df):
 
         block = header + "\n".join(lines) + "\n\n"
 
-        if len(current_msg + block) > 3900:  # Safe threshold
+        if len(current_msg + block) > 3900:
             message_chunks.append(current_msg.strip())
             current_msg = block
         else:
@@ -144,7 +143,7 @@ def filter_by_date(df, label):
     df["ParsedDate"] = df["Date"].apply(parse_date)
     return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
 
-# Load saved contacts
+# Load contacts
 def load_contacts():
     try:
         return pd.read_csv(CONTACTS_CSV)
@@ -168,11 +167,10 @@ def main():
         contact_filter = st.text_input("Contact Number")
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
-        # Dealer dropdown with typeahead
         dealer_filter = ""
-        if "Dealer Name" in df.columns:
-            dealer_names = sorted(set(df["Dealer Name"].dropna().astype(str)))
-            dealer_filter = st.selectbox("Dealer Name", [""] + dealer_names)
+        dealer_names = sorted(df["Dealer Name"].dropna().unique()) if "Dealer Name" in df.columns else []
+        if dealer_names:
+            dealer_filter = st.selectbox("Dealer Name", [""] + list(dealer_names))
 
         st.markdown("---")
         contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
@@ -180,7 +178,7 @@ def main():
 
     df_filtered = df.copy()
 
-    # Contact filtering
+    # Contact matching
     if selected_name:
         contact_row = contacts_df[contacts_df["Name"] == selected_name]
         nums = []
@@ -206,18 +204,17 @@ def main():
     if contact_filter:
         cnum = clean_number(contact_filter)
         df_filtered = df_filtered[df_filtered["Contact"].astype(str).apply(lambda x: cnum in clean_number(x))]
-    if dealer_filter:
-        df_filtered = df_filtered[df_filtered["Dealer Name"].astype(str) == dealer_filter]
+    if dealer_filter and "Dealer Name" in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered["Dealer Name"].astype(str).str.contains(dealer_filter, case=False, na=False)]
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
-    # Display listings
+    # Show results
     st.subheader("📋 Filtered Listings")
     st.dataframe(df_filtered.drop(columns=["ParsedDate"], errors="ignore"))
 
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
-
     number = st.text_input("Enter WhatsApp Number (e.g. 03xxxxxxxxx)")
     if st.button("Generate WhatsApp Message"):
         if not number or not number.strip().startswith("03"):
@@ -233,7 +230,7 @@ def main():
                     link = f"https://wa.me/{wa_number}?text={encoded}"
                     st.markdown(f"[📩 Send Message {i+1}]({link})", unsafe_allow_html=True)
 
-    # Add Contact
+    # Add contact
     st.markdown("---")
     st.subheader("➕ Add New Contact")
     with st.form("add_contact"):
