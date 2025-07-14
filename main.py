@@ -7,12 +7,11 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
-SPREADSHEET_NAME = "RealEstateTool"
-WORKSHEET_NAME = "Sheet1"
+SPREADSHEET_NAME = "Al Jazeera Real Estate & Developers"
+WORKSHEET_NAME = "Plots_Sale"
 CONTACTS_CSV = "contacts.csv"
 
-# ---- Utility Functions ----
-
+# ---- Load Data ----
 def load_data_from_gsheet():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = st.secrets["gcp_service_account"]
@@ -65,8 +64,7 @@ def load_contacts():
     except:
         return pd.DataFrame(columns=["Name", "Contact1", "Contact2", "Contact3"])
 
-# ---- WhatsApp Message Generator ----
-
+# ---- WhatsApp Generator ----
 def generate_whatsapp_chunks(df, max_chars=3900):
     filtered = []
 
@@ -92,6 +90,7 @@ def generate_whatsapp_chunks(df, max_chars=3900):
             "Demand/Price": demand
         })
 
+    # Deduplication
     seen = set()
     unique = []
     for row in filtered:
@@ -122,6 +121,7 @@ def generate_whatsapp_chunks(df, max_chars=3900):
                 return float('inf')
 
         sorted_items = sorted(items, key=lambda x: extract_plot_number(x["Plot No#"]))
+
         header = f"*Available Options in {sector} Size: {size}*\n"
         lines = []
 
@@ -143,8 +143,7 @@ def generate_whatsapp_chunks(df, max_chars=3900):
 
     return chunks
 
-# ---- Streamlit UI ----
-
+# ---- Main App ----
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
@@ -158,7 +157,7 @@ def main():
         street_filter = st.text_input("Street#")
         plot_no_filter = st.text_input("Plot No#")
         contact_filter = st.text_input("Contact Number")
-        dealer_filter = st.text_input("Dealer Name")
+        dealer_filter = st.text_input("Dealer Name (partial match)")
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
         contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
@@ -197,6 +196,7 @@ def main():
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
+    # ---- Display Data ----
     st.subheader("📋 Filtered Listings")
     st.dataframe(df_filtered.drop(columns=["ParsedDate"], errors="ignore"))
 
