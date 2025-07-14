@@ -168,9 +168,9 @@ def main():
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
         dealer_filter = ""
-        dealer_names = sorted(df["Dealer Name"].dropna().unique()) if "Dealer Name" in df.columns else []
+        dealer_names = sorted(df["Dealer name"].dropna().unique()) if "Dealer name" in df.columns else []
         if dealer_names:
-            dealer_filter = st.selectbox("Dealer Name", [""] + list(dealer_names))
+            dealer_filter = st.selectbox("Dealer name", [""] + list(dealer_names))
 
         st.markdown("---")
         contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
@@ -204,8 +204,8 @@ def main():
     if contact_filter:
         cnum = clean_number(contact_filter)
         df_filtered = df_filtered[df_filtered["Contact"].astype(str).apply(lambda x: cnum in clean_number(x))]
-    if dealer_filter and "Dealer Name" in df_filtered.columns:
-        df_filtered = df_filtered[df_filtered["Dealer Name"].astype(str).str.contains(dealer_filter, case=False, na=False)]
+    if dealer_filter and "Dealer name" in df_filtered.columns:
+        df_filtered = df_filtered[df_filtered["Dealer name"].astype(str).str.contains(dealer_filter, case=False, na=False)]
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
