@@ -9,19 +9,43 @@ from oauth2client.service_account import ServiceAccountCredentials
 SPREADSHEET_NAME = "Al Jazeera Real Estate & Developers"
 WORKSHEET_NAME = "Plots_Sale"
 CONTACTS_CSV = "contacts.csv"
-REQUIRED_COLUMNS = ["Sector", "Street#", "Plot No#", "Plot Size", "Demand/Price"]
 
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
-# Load Google Sheet
+# Load Google Sheet data (ignores empty rows)
 def load_data_from_gsheet():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = st.secrets["gcp_service_account"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     sheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
-    data = sheet.get_all_records()
-    return pd.DataFrame(data)
+
+    all_data = sheet.get_all_values()
+
+    # Find first non-empty row as header
+    header_row = None
+    for i, row in enumerate(all_data):
+        if any(cell.strip() for cell in row):
+            header_row = i
+            break
+
+    if header_row is None:
+        return pd.DataFrame()
+
+    headers = all_data[header_row]
+    data_rows = all_data[header_row + 1:]
+
+    # Filter non-empty data rows
+    cleaned_data = [row for row in data_rows if any(cell.strip() for cell in row)]
+
+    # Pad rows
+    for row in cleaned_data:
+        while len(row) < len(headers):
+            row.append("")
+        if len(row) > len(headers):
+            row[:] = row[:len(headers)]
+
+    return pd.DataFrame(cleaned_data, columns=headers)
 
 # Sector filter logic
 def sector_matches(filter_val, cell_val):
