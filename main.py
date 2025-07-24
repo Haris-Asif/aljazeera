@@ -45,7 +45,9 @@ def load_data_from_gsheet():
         if len(row) > len(headers):
             row[:] = row[:len(headers)]
 
-    return pd.DataFrame(cleaned_data, columns=headers)
+    df = pd.DataFrame(cleaned_data, columns=headers)
+    df["SheetRowNum"] = [header_row + 2 + i for i in range(len(df))]
+    return df
 
 # Sector filter logic
 def sector_matches(filter_val, cell_val):
@@ -107,7 +109,6 @@ def generate_whatsapp_messages(df):
         key = (row["Sector"], row["Plot Size"])
         grouped.setdefault(key, []).append(row)
 
-    # Sort and prepare chunks
     def extract_plot_number(val):
         try:
             return int(re.search(r"\d+", str(val)).group())
@@ -202,7 +203,6 @@ def main():
 
     df_filtered = df.copy()
 
-    # Contact matching
     if selected_name:
         contact_row = contacts_df[contacts_df["Name"] == selected_name]
         nums = []
@@ -216,7 +216,6 @@ def main():
                 lambda x: any(n in clean_number(x) for n in nums)
             )]
 
-    # Other filters
     if sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
     if plot_size_filter:
@@ -233,9 +232,36 @@ def main():
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
-    # Show results
     st.subheader("📋 Filtered Listings")
     st.dataframe(df_filtered.drop(columns=["ParsedDate"], errors="ignore"))
+
+    st.markdown("---")
+    st.subheader("🗑️ Delete Listings from Google Sheet")
+
+    if not df_filtered.empty:
+        df_filtered_reset = df_filtered.reset_index(drop=True)
+        selected_indices = st.multiselect("Select rows to delete", df_filtered_reset.index,
+                                          format_func=lambda i: f"{df_filtered_reset.at[i, 'Sector']} | Plot#: {df_filtered_reset.at[i, 'Plot No#']}")
+
+        if st.button("❌ Delete Selected Rows"):
+            if selected_indices:
+                try:
+                    sheet_row_nums = df_filtered_reset.loc[selected_indices, "SheetRowNum"].tolist()
+                    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+                    creds_dict = st.secrets["gcp_service_account"]
+                    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+                    client = gspread.authorize(creds)
+                    sheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
+
+                    for row_num in sorted(sheet_row_nums, reverse=True):
+                        sheet.delete_rows(row_num)
+
+                    st.success(f"✅ Deleted {len(sheet_row_nums)} row(s) from Google Sheet.")
+                    st.experimental_rerun()
+                except Exception as e:
+                    st.error(f"❌ Failed to delete rows: {e}")
+            else:
+                st.warning("⚠️ No rows selected.")
 
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
@@ -254,7 +280,6 @@ def main():
                     link = f"https://wa.me/{wa_number}?text={encoded}"
                     st.markdown(f"[📩 Send Message {i+1}]({link})", unsafe_allow_html=True)
 
-    # Add contact
     st.markdown("---")
     st.subheader("➕ Add New Contact")
     with st.form("add_contact"):
