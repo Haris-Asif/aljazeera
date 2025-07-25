@@ -7,51 +7,57 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # Constants
 SPREADSHEET_NAME = "Al Jazeera Real Estate & Developers"
-WORKSHEET_NAME = "Plots_Sale"
-CONTACTS_CSV = "contacts.csv"
+PLOTS_WORKSHEET = "Plots_Sale"
+CONTACTS_WORKSHEET = "Contacts"
 
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
-# Load Google Sheet including empty rows, keep actual row numbers
-def load_data_from_gsheet():
+# === Google Sheet Loader ===
+def get_gsheet_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = st.secrets["gcp_service_account"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
-    sheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
+    return gspread.authorize(creds)
 
-    all_rows = sheet.get_all_values()
-    if not all_rows:
-        return pd.DataFrame()
+def load_data_from_gsheet():
+    client = get_gsheet_client()
+    sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_WORKSHEET)
+    all_data = sheet.get_all_values()
 
-    # Find header row
-    header_row_index = None
-    for idx, row in enumerate(all_rows):
+    # Locate header row
+    header_row = None
+    for i, row in enumerate(all_data):
         if any(cell.strip() for cell in row):
-            header_row_index = idx
+            header_row = i
             break
-
-    if header_row_index is None:
+    if header_row is None:
         return pd.DataFrame()
 
-    headers = all_rows[header_row_index]
-    data_rows = all_rows[header_row_index + 1:]
+    headers = all_data[header_row]
+    data_rows = all_data[header_row + 1:]
 
-    # Normalize all rows to same length as headers
-    full_data = []
-    row_nums = []
-    for i, row in enumerate(data_rows):
-        sheet_row_num = header_row_index + 2 + i  # +2: header + 1-based indexing
+    # Keep all rows including empty ones for correct row numbers
+    for row in data_rows:
         while len(row) < len(headers):
             row.append("")
-        full_data.append(row[:len(headers)])
-        row_nums.append(sheet_row_num)
+        if len(row) > len(headers):
+            row[:] = row[:len(headers)]
 
-    df = pd.DataFrame(full_data, columns=headers)
-    df["SheetRowNum"] = row_nums
+    df = pd.DataFrame(data_rows, columns=headers)
+    df["SheetRowNum"] = [header_row + 2 + i for i in range(len(df))]
     return df
 
-# Sector matching
+def load_contacts_from_gsheet():
+    try:
+        client = get_gsheet_client()
+        contact_sheet = client.open(SPREADSHEET_NAME).worksheet(CONTACTS_WORKSHEET)
+        records = contact_sheet.get_all_records()
+        return pd.DataFrame(records), contact_sheet
+    except Exception as e:
+        st.error(f"❌ Failed to load contacts: {e}")
+        return pd.DataFrame(columns=["Name", "Contact1", "Contact2", "Contact3"]), None
+
+# === Utility Functions ===
 def sector_matches(filter_val, cell_val):
     if not filter_val:
         return True
@@ -61,11 +67,16 @@ def sector_matches(filter_val, cell_val):
         return f == c
     return f in c
 
-# Phone cleaner
 def clean_number(num):
     return re.sub(r"[^\d]", "", str(num))
 
-# WhatsApp message generator (unchanged logic)
+def extract_plot_number(val):
+    try:
+        return int(re.search(r"\d+", str(val)).group())
+    except:
+        return float("inf")
+
+# === WhatsApp Message Builder ===
 def generate_whatsapp_messages(df):
     filtered = []
     for _, row in df.iterrows():
@@ -109,12 +120,6 @@ def generate_whatsapp_messages(df):
         key = (row["Sector"], row["Plot Size"])
         grouped.setdefault(key, []).append(row)
 
-    def extract_plot_number(val):
-        try:
-            return int(re.search(r"\d+", str(val)).group())
-        except:
-            return float("inf")
-
     message_chunks = []
     current_msg = ""
 
@@ -142,7 +147,7 @@ def generate_whatsapp_messages(df):
 
     return message_chunks
 
-# Date filter
+# === Date Filter ===
 def filter_by_date(df, label):
     if label == "All":
         return df
@@ -153,8 +158,7 @@ def filter_by_date(df, label):
         "Last 30 Days": 30,
         "Last 2 Months": 60
     }
-    days = days_map.get(label, 0)
-    cutoff = today - timedelta(days=days)
+    cutoff = today - timedelta(days=days_map.get(label, 0))
 
     def parse_date(val):
         try:
@@ -168,25 +172,13 @@ def filter_by_date(df, label):
     df["ParsedDate"] = df["Date"].apply(parse_date)
     return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
 
-# Load contacts
-def load_contacts():
-    try:
-        return pd.read_csv(CONTACTS_CSV)
-    except:
-        return pd.DataFrame(columns=["Name", "Contact1", "Contact2", "Contact3"])
-
-# Main App
+# === Main App ===
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
-    df_all = load_data_from_gsheet()
-    df_all = df_all.fillna("")
-    contacts_df = load_contacts()
+    df = load_data_from_gsheet().fillna("")
+    contacts_df, contact_sheet = load_contacts_from_gsheet()
 
-    # Filter out empty rows for display
-    df = df_all[df_all.apply(lambda row: any(str(cell).strip() for cell in row if not isinstance(cell, int)), axis=1)]
-
-    # Sidebar filters
     with st.sidebar:
         st.header("🔍 Filters")
         sector_filter = st.text_input("Sector (e.g. I-14/1 or I-14)")
@@ -199,25 +191,25 @@ def main():
         dealer_filter = ""
         dealer_names = sorted(df["Dealer name"].dropna().unique()) if "Dealer name" in df.columns else []
         if dealer_names:
-            dealer_filter = st.selectbox("Dealer name", [""] + dealer_names)
+            dealer_filter = st.selectbox("Dealer name", [""] + list(dealer_names))
 
+        st.markdown("---")
         contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
         selected_name = st.selectbox("📇 Saved Contacts", contact_names)
 
-    # Apply filters
     df_filtered = df.copy()
 
+    contact_nums = []
     if selected_name:
         contact_row = contacts_df[contacts_df["Name"] == selected_name]
-        nums = []
         for col in ["Contact1", "Contact2", "Contact3"]:
-            if col in contact_row.columns:
-                val = contact_row[col].values[0]
-                if pd.notna(val) and str(val).strip():
-                    nums.append(clean_number(val))
-        if nums:
+            val = contact_row[col].values[0] if col in contact_row.columns else ""
+            if pd.notna(val) and str(val).strip():
+                contact_nums.append(clean_number(val))
+
+        if contact_nums:
             df_filtered = df_filtered[df_filtered["Contact"].astype(str).apply(
-                lambda x: any(n in clean_number(x) for n in nums)
+                lambda x: any(num in clean_number(x) for num in contact_nums)
             )]
 
     if sector_filter:
@@ -236,59 +228,52 @@ def main():
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
-    # Display table
     st.subheader("📋 Filtered Listings")
     st.dataframe(df_filtered.drop(columns=["ParsedDate"], errors="ignore"))
 
-    # Deletion section
     st.markdown("---")
     st.subheader("🗑️ Delete Listings from Google Sheet")
+
     if not df_filtered.empty:
         df_filtered_reset = df_filtered.reset_index(drop=True)
         selected_indices = st.multiselect("Select rows to delete", df_filtered_reset.index,
                                           format_func=lambda i: f"{df_filtered_reset.at[i, 'Sector']} | Plot#: {df_filtered_reset.at[i, 'Plot No#']}")
+
         if st.button("❌ Delete Selected Rows"):
-            if selected_indices:
-                try:
-                    sheet_row_nums = df_filtered_reset.loc[selected_indices, "SheetRowNum"].astype(int).tolist()
+            try:
+                sheet_row_nums = df_filtered_reset.loc[selected_indices, "SheetRowNum"].tolist()
+                client = get_gsheet_client()
+                sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_WORKSHEET)
+                for row_num in sorted(sheet_row_nums, reverse=True):
+                    sheet.delete_rows(row_num)
+                st.success(f"✅ Deleted {len(sheet_row_nums)} row(s).")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Failed to delete rows: {e}")
 
-                    # Authorize again
-                    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-                    creds_dict = st.secrets["gcp_service_account"]
-                    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-                    client = gspread.authorize(creds)
-                    sheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
-
-                    # Delete from bottom to top
-                    for row_num in sorted(sheet_row_nums, reverse=True):
-                        sheet.delete_rows(row_num)
-
-                    st.success(f"✅ Deleted {len(sheet_row_nums)} row(s) from Google Sheet.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Failed to delete rows: {e}")
-            else:
-                st.warning("⚠️ No rows selected.")
-
-    # WhatsApp
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
-    number = st.text_input("Enter WhatsApp Number (e.g. 03xxxxxxxxx)")
+
+    if selected_name and contact_nums:
+        selected_whatsapp = st.selectbox("Select number to send message", [f"0{n}" for n in contact_nums])
+    else:
+        selected_whatsapp = st.text_input("Enter WhatsApp Number (e.g. 03xxxxxxxxx)")
+
     if st.button("Generate WhatsApp Message"):
-        if not number or not number.strip().startswith("03"):
-            st.error("❌ Please enter a valid number starting with 03...")
+        final_number = clean_number(selected_whatsapp)
+        if not final_number.startswith("3") or len(final_number) != 10:
+            st.error("❌ Invalid number.")
         else:
             chunks = generate_whatsapp_messages(df_filtered)
             if not chunks:
-                st.warning("⚠️ No valid listings to include.")
+                st.warning("⚠️ No valid listings.")
             else:
-                wa_number = "92" + clean_number(number).lstrip("0")
+                wa_number = "92" + final_number
                 for i, msg in enumerate(chunks):
                     encoded = msg.replace(" ", "%20").replace("\n", "%0A")
                     link = f"https://wa.me/{wa_number}?text={encoded}"
                     st.markdown(f"[📩 Send Message {i+1}]({link})", unsafe_allow_html=True)
 
-    # Add contact
     st.markdown("---")
     st.subheader("➕ Add New Contact")
     with st.form("add_contact"):
@@ -299,10 +284,12 @@ def main():
         submitted = st.form_submit_button("Save Contact")
         if submitted:
             if name and c1:
-                new_row = pd.DataFrame([[name, c1, c2, c3]], columns=["Name", "Contact1", "Contact2", "Contact3"])
-                updated_df = pd.concat([contacts_df, new_row], ignore_index=True)
-                updated_df.to_csv(CONTACTS_CSV, index=False)
-                st.success(f"Contact '{name}' saved.")
+                try:
+                    contact_sheet.append_row([name, c1, c2, c3])
+                    st.success(f"✅ Contact '{name}' saved.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Failed to save contact: {e}")
             else:
                 st.warning("Name and Contact1 are required.")
 
