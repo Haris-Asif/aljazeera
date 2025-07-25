@@ -22,7 +22,6 @@ def load_data_from_gsheet():
 
     all_data = sheet.get_all_values()
 
-    # Find first non-empty row as header
     header_row = None
     for i, row in enumerate(all_data):
         if any(cell.strip() for cell in row):
@@ -34,11 +33,8 @@ def load_data_from_gsheet():
 
     headers = all_data[header_row]
     data_rows = all_data[header_row + 1:]
-
-    # Filter non-empty data rows
     cleaned_data = [row for row in data_rows if any(cell.strip() for cell in row)]
 
-    # Pad rows
     for row in cleaned_data:
         while len(row) < len(headers):
             row.append("")
@@ -46,7 +42,7 @@ def load_data_from_gsheet():
             row[:] = row[:len(headers)]
 
     df = pd.DataFrame(cleaned_data, columns=headers)
-    df["SheetRowNum"] = [header_row + 2 + i for i in range(len(df))]
+    df["SheetRowNum"] = [header_row + 2 + i for i in range(len(cleaned_data))]
     return df
 
 # Sector filter logic
@@ -88,7 +84,6 @@ def generate_whatsapp_messages(df):
             "Demand/Price": demand
         })
 
-    # Deduplicate
     seen = set()
     unique = []
     for row in filtered:
@@ -103,7 +98,6 @@ def generate_whatsapp_messages(df):
             seen.add(key)
             unique.append(row)
 
-    # Group by Sector & Plot Size
     grouped = {}
     for row in unique:
         key = (row["Sector"], row["Plot Size"])
@@ -240,13 +234,22 @@ def main():
 
     if not df_filtered.empty:
         df_filtered_reset = df_filtered.reset_index(drop=True)
-        selected_indices = st.multiselect("Select rows to delete", df_filtered_reset.index,
-                                          format_func=lambda i: f"{df_filtered_reset.at[i, 'Sector']} | Plot#: {df_filtered_reset.at[i, 'Plot No#']}")
+        selected_indices = st.multiselect(
+            "Select rows to delete",
+            df_filtered_reset.index,
+            format_func=lambda i: f"{df_filtered_reset.at[i, 'Sector']} | Plot#: {df_filtered_reset.at[i, 'Plot No#']}"
+        )
 
         if st.button("❌ Delete Selected Rows"):
             if selected_indices:
                 try:
-                    sheet_row_nums = df_filtered_reset.loc[selected_indices, "SheetRowNum"].tolist()
+                    if "SheetRowNum" not in df_filtered_reset.columns:
+                        st.error("Missing SheetRowNum. Cannot delete from sheet.")
+                        return
+
+                    sheet_row_nums = df_filtered_reset.loc[selected_indices, "SheetRowNum"].astype(int).tolist()
+                    st.write("Deleting rows from sheet (row numbers):", sheet_row_nums)
+
                     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
                     creds_dict = st.secrets["gcp_service_account"]
                     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -257,7 +260,8 @@ def main():
                         sheet.delete_rows(row_num)
 
                     st.success(f"✅ Deleted {len(sheet_row_nums)} row(s) from Google Sheet.")
-                    st.experimental_rerun()
+                    st.rerun()
+
                 except Exception as e:
                     st.error(f"❌ Failed to delete rows: {e}")
             else:
