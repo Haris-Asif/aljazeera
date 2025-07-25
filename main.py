@@ -12,7 +12,7 @@ CONTACTS_CSV = "contacts.csv"
 
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
-# Load Google Sheet data (ignores empty rows)
+# Load Google Sheet including empty rows, keep actual row numbers
 def load_data_from_gsheet():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = st.secrets["gcp_service_account"]
@@ -20,32 +20,38 @@ def load_data_from_gsheet():
     client = gspread.authorize(creds)
     sheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
 
-    all_data = sheet.get_all_values()
-
-    header_row = None
-    for i, row in enumerate(all_data):
-        if any(cell.strip() for cell in row):
-            header_row = i
-            break
-
-    if header_row is None:
+    all_rows = sheet.get_all_values()
+    if not all_rows:
         return pd.DataFrame()
 
-    headers = all_data[header_row]
-    data_rows = all_data[header_row + 1:]
-    cleaned_data = [row for row in data_rows if any(cell.strip() for cell in row)]
+    # Find header row
+    header_row_index = None
+    for idx, row in enumerate(all_rows):
+        if any(cell.strip() for cell in row):
+            header_row_index = idx
+            break
 
-    for row in cleaned_data:
+    if header_row_index is None:
+        return pd.DataFrame()
+
+    headers = all_rows[header_row_index]
+    data_rows = all_rows[header_row_index + 1:]
+
+    # Normalize all rows to same length as headers
+    full_data = []
+    row_nums = []
+    for i, row in enumerate(data_rows):
+        sheet_row_num = header_row_index + 2 + i  # +2: header + 1-based indexing
         while len(row) < len(headers):
             row.append("")
-        if len(row) > len(headers):
-            row[:] = row[:len(headers)]
+        full_data.append(row[:len(headers)])
+        row_nums.append(sheet_row_num)
 
-    df = pd.DataFrame(cleaned_data, columns=headers)
-    df["SheetRowNum"] = [header_row + 2 + i for i in range(len(cleaned_data))]
+    df = pd.DataFrame(full_data, columns=headers)
+    df["SheetRowNum"] = row_nums
     return df
 
-# Sector filter logic
+# Sector matching
 def sector_matches(filter_val, cell_val):
     if not filter_val:
         return True
@@ -59,7 +65,7 @@ def sector_matches(filter_val, cell_val):
 def clean_number(num):
     return re.sub(r"[^\d]", "", str(num))
 
-# WhatsApp message builder
+# WhatsApp message generator (unchanged logic)
 def generate_whatsapp_messages(df):
     filtered = []
     for _, row in df.iterrows():
@@ -173,10 +179,14 @@ def load_contacts():
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
-    df = load_data_from_gsheet()
-    df = df.fillna("")
+    df_all = load_data_from_gsheet()
+    df_all = df_all.fillna("")
     contacts_df = load_contacts()
 
+    # Filter out empty rows for display
+    df = df_all[df_all.apply(lambda row: any(str(cell).strip() for cell in row if not isinstance(cell, int)), axis=1)]
+
+    # Sidebar filters
     with st.sidebar:
         st.header("🔍 Filters")
         sector_filter = st.text_input("Sector (e.g. I-14/1 or I-14)")
@@ -189,12 +199,12 @@ def main():
         dealer_filter = ""
         dealer_names = sorted(df["Dealer name"].dropna().unique()) if "Dealer name" in df.columns else []
         if dealer_names:
-            dealer_filter = st.selectbox("Dealer name", [""] + list(dealer_names))
+            dealer_filter = st.selectbox("Dealer name", [""] + dealer_names)
 
-        st.markdown("---")
         contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
         selected_name = st.selectbox("📇 Saved Contacts", contact_names)
 
+    # Apply filters
     df_filtered = df.copy()
 
     if selected_name:
@@ -226,47 +236,41 @@ def main():
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
+    # Display table
     st.subheader("📋 Filtered Listings")
     st.dataframe(df_filtered.drop(columns=["ParsedDate"], errors="ignore"))
 
+    # Deletion section
     st.markdown("---")
     st.subheader("🗑️ Delete Listings from Google Sheet")
-
     if not df_filtered.empty:
         df_filtered_reset = df_filtered.reset_index(drop=True)
-        selected_indices = st.multiselect(
-            "Select rows to delete",
-            df_filtered_reset.index,
-            format_func=lambda i: f"{df_filtered_reset.at[i, 'Sector']} | Plot#: {df_filtered_reset.at[i, 'Plot No#']}"
-        )
-
+        selected_indices = st.multiselect("Select rows to delete", df_filtered_reset.index,
+                                          format_func=lambda i: f"{df_filtered_reset.at[i, 'Sector']} | Plot#: {df_filtered_reset.at[i, 'Plot No#']}")
         if st.button("❌ Delete Selected Rows"):
             if selected_indices:
                 try:
-                    if "SheetRowNum" not in df_filtered_reset.columns:
-                        st.error("Missing SheetRowNum. Cannot delete from sheet.")
-                        return
-
                     sheet_row_nums = df_filtered_reset.loc[selected_indices, "SheetRowNum"].astype(int).tolist()
-                    st.write("Deleting rows from sheet (row numbers):", sheet_row_nums)
 
+                    # Authorize again
                     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
                     creds_dict = st.secrets["gcp_service_account"]
                     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
                     client = gspread.authorize(creds)
                     sheet = client.open(SPREADSHEET_NAME).worksheet(WORKSHEET_NAME)
 
+                    # Delete from bottom to top
                     for row_num in sorted(sheet_row_nums, reverse=True):
                         sheet.delete_rows(row_num)
 
                     st.success(f"✅ Deleted {len(sheet_row_nums)} row(s) from Google Sheet.")
                     st.rerun()
-
                 except Exception as e:
                     st.error(f"❌ Failed to delete rows: {e}")
             else:
                 st.warning("⚠️ No rows selected.")
 
+    # WhatsApp
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
     number = st.text_input("Enter WhatsApp Number (e.g. 03xxxxxxxxx)")
@@ -284,6 +288,7 @@ def main():
                     link = f"https://wa.me/{wa_number}?text={encoded}"
                     st.markdown(f"[📩 Send Message {i+1}]({link})", unsafe_allow_html=True)
 
+    # Add contact
     st.markdown("---")
     st.subheader("➕ Add New Contact")
     with st.form("add_contact"):
