@@ -12,14 +12,14 @@ CONTACTS_SHEET = "Contacts"
 
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
-# Load Google Sheets credentials
+# Google Sheets client
 def get_gspread_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = st.secrets["gcp_service_account"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
-# Load plot listings
+# Load plots
 def load_data_from_gsheet():
     client = get_gspread_client()
     sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
@@ -35,8 +35,8 @@ def load_data_from_gsheet():
 
     headers = all_data[header_row]
     data_rows = all_data[header_row + 1:]
-
     cleaned_data = [row for row in data_rows if any(cell.strip() for cell in row)]
+
     for row in cleaned_data:
         while len(row) < len(headers):
             row.append("")
@@ -47,18 +47,18 @@ def load_data_from_gsheet():
     df["SheetRowNum"] = [header_row + 2 + i for i in range(len(df))]
     return df
 
-# Load contacts from Contacts sheet
+# Load contacts
 def load_contacts():
     client = get_gspread_client()
     sheet = client.open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
     data = sheet.get_all_records()
     return pd.DataFrame(data)
 
-# Clean phone number
+# Clean number
 def clean_number(num):
     return re.sub(r"[^\d]", "", str(num))
 
-# Sector filter logic
+# Sector filter
 def sector_matches(filter_val, cell_val):
     if not filter_val:
         return True
@@ -232,9 +232,13 @@ def main():
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
 
-    selected_whatsapp = st.selectbox("Select Number to Send Message", selected_numbers)
+    selected_whatsapp = st.selectbox("Select Number from Saved Contact", selected_numbers)
+    manual_number = st.text_input("Or Enter WhatsApp Number Manually (e.g. 03001234567)")
+
     if st.button("Generate WhatsApp Message"):
-        final_number = clean_number(selected_whatsapp)
+        raw_input_number = manual_number if manual_number.strip() else selected_whatsapp
+        final_number = clean_number(raw_input_number)
+
         if len(final_number) == 11 and final_number.startswith("03"):
             wa_number = "92" + final_number[1:]
             chunks = generate_whatsapp_messages(df_filtered)
@@ -246,7 +250,7 @@ def main():
                     link = f"https://wa.me/{wa_number}?text={encoded}"
                     st.markdown(f"[📩 Send Message {i+1}]({link})", unsafe_allow_html=True)
         else:
-            st.error("❌ Invalid number. Please enter in format like 03001234567.")
+            st.error("❌ Invalid number. Please enter a valid number in format like 03001234567.")
 
 if __name__ == "__main__":
     main()
