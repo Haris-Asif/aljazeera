@@ -7,16 +7,15 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # Constants
 SPREADSHEET_NAME = "Al Jazeera Real Estate & Developers"
-PLOTS_SHEET = "Plots_Sale"
+PLOTS_SHEET = "Plots"
 CONTACTS_SHEET = "Contacts"
 
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
-# Clean number
 def clean_number(num):
     return re.sub(r"[^\d]", "", str(num))
 
-# Google Sheets
+# Load Google Sheet data
 def get_gsheet_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = st.secrets["gcp_service_account"]
@@ -27,16 +26,21 @@ def load_plot_data():
     client = get_gsheet_client()
     sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
     all_data = sheet.get_all_values()
+
+    # Find first non-empty header row
     header_row = next((i for i, row in enumerate(all_data) if any(cell.strip() for cell in row)), None)
     if header_row is None:
         return pd.DataFrame()
+
     headers = all_data[header_row]
     data_rows = all_data[header_row + 1:]
+
     cleaned_data = [row for row in data_rows if any(cell.strip() for cell in row)]
     for row in cleaned_data:
         while len(row) < len(headers):
             row.append("")
         row[:] = row[:len(headers)]
+
     df = pd.DataFrame(cleaned_data, columns=headers)
     df["SheetRowNum"] = [header_row + 2 + i for i in range(len(df))]
     return df
@@ -48,6 +52,7 @@ def load_contacts():
     header_row = next((i for i, row in enumerate(all_data) if any(cell.strip() for cell in row)), None)
     if header_row is None:
         return pd.DataFrame(columns=["Name", "Contact1", "Contact2", "Contact3"])
+
     headers = all_data[header_row]
     data_rows = all_data[header_row + 1:]
     cleaned_data = [row for row in data_rows if any(cell.strip() for cell in row)]
@@ -57,7 +62,6 @@ def load_contacts():
         row[:] = row[:len(headers)]
     return pd.DataFrame(cleaned_data, columns=headers)
 
-# Date filtering
 def filter_by_date(df, label):
     if label == "All":
         return df
@@ -68,7 +72,7 @@ def filter_by_date(df, label):
 
     def parse_date(val):
         try:
-            return datetime.strptime(val.strip(), "%Y-%m-%d %H:%M:%S")
+            return datetime.strptime(val.strip(), "%Y-%m-%d, %H:%M")
         except:
             try:
                 return datetime.strptime(val.strip(), "%Y-%m-%d")
@@ -100,6 +104,7 @@ def generate_whatsapp_messages(df):
             continue
         if not (sector and plot_no and plot_size and demand):
             continue
+
         filtered.append({
             "Sector": sector,
             "Street No": street,
@@ -116,7 +121,7 @@ def generate_whatsapp_messages(df):
             row["Plot No"],
             row["Plot Size"],
             row["Demand"],
-            row["Street No"] if "I-15/" in row["Sector"] else ""
+            row["Street No"]
         )
         if key not in seen:
             seen.add(key)
@@ -139,23 +144,21 @@ def generate_whatsapp_messages(df):
     for (sector, size), items in sorted(grouped.items()):
         sorted_items = sorted(items, key=lambda x: extract_plot_number(x["Plot No"]))
         header = f"*Available Options in {sector} Size: {size}*\n"
-        lines = []
-        for row in sorted_items:
-            if "I-15/" in sector:
-                line = f"St: {row['Street No']} | P: {row['Plot No']} | S: {row['Plot Size']} | D: {row['Demand']}"
-            else:
-                line = f"P: {row['Plot No']} | S: {row['Plot Size']} | D: {row['Demand']}"
-            lines.append(line)
+        lines = [f"P: {row['Plot No']} | S: {row['Plot Size']} | D: {row['Demand']}" for row in sorted_items]
         block = header + "\n".join(lines) + "\n\n"
+
         if len(current_msg + block) > 3900:
             message_chunks.append(current_msg.strip())
             current_msg = block
         else:
             current_msg += block
+
     if current_msg:
         message_chunks.append(current_msg.strip())
+
     return message_chunks
 
+# Main app
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
@@ -171,39 +174,40 @@ def main():
         contact_filter = st.text_input("Contact Number")
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
-        all_names = sorted(set(df["Sender Name"].dropna()) | set(df["Extracted Name"].dropna()))
-        selected_name_sidebar = st.selectbox("Filter by Name (Sender or Extracted)", [""] + all_names)
+        sender_names = set(df["Sender Name"].dropna()) if "Sender Name" in df.columns else set()
+        extracted_names = set(df["Extracted Name"].dropna()) if "Extracted Name" in df.columns else set()
+        all_names = sorted(sender_names | extracted_names)
+        dealer_filter = st.selectbox("Name (Sender or Extracted)", [""] + all_names)
 
+        st.markdown("---")
         contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
-        selected_saved_contact = st.selectbox("📇 Saved Contacts (For Filtering)", contact_names)
+        selected_name_sidebar = st.selectbox("📇 Saved Contacts (For Filtering)", contact_names)
 
     df_filtered = df.copy()
 
-    if selected_saved_contact:
-        row = contacts_df[contacts_df["Name"] == selected_saved_contact]
-        numbers = []
+    if selected_name_sidebar:
+        row = contacts_df[contacts_df["Name"] == selected_name_sidebar]
+        nums = []
         for col in ["Contact1", "Contact2", "Contact3"]:
             val = row[col].values[0] if col in row.columns else ""
-            if val:
-                cleaned = clean_number(val)
-                if cleaned:
-                    numbers.append(cleaned)
+            if val and str(val).strip():
+                nums.append(clean_number(val))
 
-        def contact_match(cell_val):
-            cell_cleaned = clean_number(cell_val)
-            return any(num in cell_cleaned for num in numbers)
+        if nums:
+            def contact_match(x):
+                x = str(x).replace("-", "").strip()
+                return any(n in clean_number(x) for n in nums)
 
+            df_filtered = df_filtered[
+                df_filtered["Sender Number"].astype(str).apply(contact_match) |
+                df_filtered["Extracted Contact"].astype(str).apply(contact_match)
+            ]
+
+    if dealer_filter:
         df_filtered = df_filtered[
-            df_filtered["Sender Number"].astype(str).apply(contact_match) |
-            df_filtered["Extracted Contact"].astype(str).apply(contact_match)
+            df_filtered["Sender Name"].astype(str).str.contains(dealer_filter, case=False, na=False) |
+            df_filtered["Extracted Name"].astype(str).str.contains(dealer_filter, case=False, na=False)
         ]
-
-    if selected_name_sidebar:
-        df_filtered = df_filtered[
-            df_filtered["Sender Name"].astype(str).str.contains(selected_name_sidebar, case=False, na=False) |
-            df_filtered["Extracted Name"].astype(str).str.contains(selected_name_sidebar, case=False, na=False)
-        ]
-
     if sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
     if plot_size_filter:
@@ -250,7 +254,7 @@ def main():
         elif len(cleaned) == 12 and cleaned.startswith("92"):
             wa_number = cleaned
         else:
-            st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
+            st.error("❌ Invalid number format.")
             return
 
         chunks = generate_whatsapp_messages(df_filtered)
