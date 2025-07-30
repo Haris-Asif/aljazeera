@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from oauth2client.service_account import ServiceAccountCredentials
 
 # Constants
-SPREADSHEET_NAME = "Al Jazeera Real Estate & Developers"
+SPREADSHEET_NAME = "Al-Jazeera"
 PLOTS_SHEET = "Plots"
 CONTACTS_SHEET = "Contacts"
 
