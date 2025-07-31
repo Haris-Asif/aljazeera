@@ -5,25 +5,47 @@ import re
 from datetime import datetime, timedelta
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Constants
+# ------------------------ LOGIN AUTHENTICATION ------------------------
+def login():
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+
+    if not st.session_state.logged_in:
+        st.title("🔐 Al-Jazeera Real Estate Login")
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Login")
+
+            if submitted:
+                if username == "aljazeera" and password == "H@ri$_980":
+                    st.session_state.logged_in = True
+                    st.experimental_rerun()
+                else:
+                    st.error("❌ Invalid username or password.")
+        return False
+    return True
+
+# ------------------------ CLEANING UTILS ------------------------
+def clean_number(num):
+    return re.sub(r"[^\d]", "", str(num or ""))
+
+def extract_numbers(text):
+    text = str(text or "")
+    parts = re.split(r"[,\s]+", text)
+    return [clean_number(p) for p in parts if clean_number(p).startswith("03") or clean_number(p).startswith("923")]
+
+# ------------------------ GOOGLE SHEETS SETUP ------------------------
 SPREADSHEET_NAME = "Al-Jazeera"
 PLOTS_SHEET = "Plots"
 CONTACTS_SHEET = "Contacts"
 
-st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
-
-# Clean number
-def clean_number(num):
-    return re.sub(r"[^\d]", "", str(num or ""))
-
-# Google Sheets client
 def get_gsheet_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = st.secrets["gcp_service_account"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
-# Load plot data
 def load_plot_data():
     client = get_gsheet_client()
     sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
@@ -32,122 +54,114 @@ def load_plot_data():
     df["SheetRowNum"] = [i + 2 for i in range(len(df))]  # Account for header
     return df
 
-# Load contacts
 def load_contacts():
     client = get_gsheet_client()
     sheet = client.open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
     data = sheet.get_all_records()
     return pd.DataFrame(data)
 
-# Extract all phone numbers from a cell
-def extract_numbers(text):
-    if not text:
-        return []
-    parts = re.split(r"[,\s]+", text)
-    return [clean_number(p) for p in parts if clean_number(p).startswith("03") or clean_number(p).startswith("923")]
-
-# Group dealer names by contacts
-def build_unique_name_map(df):
-    contact_name_map = {}
-    for _, row in df.iterrows():
-        name = str(row.get("Extracted Name") or "").strip()
-        contact_field = str(row.get("Extracted Contact") or "")
-        numbers = extract_numbers(contact_field)
-        for num in numbers:
-            if num not in contact_name_map:
-                contact_name_map[num] = name
-    # Now reduce name list based on unique numbers
-    name_groups = {}
-    for num, name in contact_name_map.items():
-        if name not in name_groups.values():
-            name_groups[num] = name
-    return sorted(set(name_groups.values())), contact_name_map
-
-# Date filter
+# ------------------------ FILTERING & MAPPING ------------------------
 def filter_by_date(df, label):
     if label == "All":
         return df
     days_map = {"Last 7 Days": 7, "Last 15 Days": 15, "Last 30 Days": 30, "Last 2 Months": 60}
-    cutoff = datetime.now() - timedelta(days=days_map.get(label, 0))
+    days = days_map.get(label, 0)
+    cutoff = datetime.now() - timedelta(days=days)
 
-    def parse_date(val):
+    def try_parse(val):
         try:
             return datetime.strptime(val.strip(), "%Y-%m-%d %H:%M:%S")
         except:
             return None
 
-    df["ParsedDate"] = df["Timestamp"].apply(parse_date)
+    df["ParsedDate"] = df["Timestamp"].apply(try_parse)
     return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
 
-# Sector matching logic
 def sector_matches(filter_val, cell_val):
     if not filter_val:
         return True
     f = filter_val.replace(" ", "").upper()
     c = str(cell_val).replace(" ", "").upper()
+    if "/" in f:
+        return f == c
     return f in c
 
-# Generate WhatsApp messages
+# ------------------------ GROUPED NAME CONTACT ------------------------
+def build_unique_name_map(df):
+    name_map = {}
+    for _, row in df.iterrows():
+        name = str(row.get("Extracted Name") or "").strip()
+        contacts = extract_numbers(row.get("Extracted Contact", ""))
+        for num in contacts:
+            if num not in name_map:
+                name_map[num] = name
+    unique_names = sorted(set(name_map.values()))
+    return unique_names, name_map
+
+# ------------------------ WHATSAPP MESSAGE BUILDER ------------------------
 def generate_whatsapp_messages(df):
     filtered = []
     for _, row in df.iterrows():
-        sector = str(row.get("Sector", "")).strip()
         plot_no = str(row.get("Plot No", "")).strip()
-        plot_size = str(row.get("Plot Size", "")).strip()
-        demand = str(row.get("Demand", "")).strip()
-        street = str(row.get("Street No", "")).strip()
-
         if "series" in plot_no.lower():
             continue
-        if not re.match(r"^[A-Z]-\d+(/\d+)?$", sector):
+
+        sector = str(row.get("Sector", "")).strip()
+        size = str(row.get("Plot Size", "")).strip()
+        demand = str(row.get("Demand", "")).strip()
+
+        if not (sector and plot_no and size and demand):
             continue
-        if not (sector and plot_no and plot_size and demand):
-            continue
+
         filtered.append({
             "Sector": sector,
-            "Street No": street,
             "Plot No": plot_no,
-            "Plot Size": plot_size,
+            "Plot Size": size,
             "Demand": demand
         })
 
-    # Sort by numeric plot number
-    def extract_plot_number(pn):
+    # Sort by plot number
+    def extract_plot_number(val):
         try:
-            return int(re.search(r"\d+", pn).group())
+            return int(re.search(r"\d+", str(val)).group())
         except:
             return float("inf")
 
-    filtered.sort(key=lambda r: extract_plot_number(r["Plot No"]))
+    filtered.sort(key=lambda x: extract_plot_number(x["Plot No"]))
 
+    # Group and format
     grouped = {}
     for row in filtered:
         key = (row["Sector"], row["Plot Size"])
         grouped.setdefault(key, []).append(row)
 
     chunks = []
-    current_msg = ""
+    current = ""
     for (sector, size), items in grouped.items():
+        block = f"*Available Options in {sector} Size: {size}*\n"
         lines = [f"P: {r['Plot No']} | S: {r['Plot Size']} | D: {r['Demand']}" for r in items]
-        block = f"*Available Options in {sector} Size: {size}*\n" + "\n".join(lines) + "\n\n"
-        if len(current_msg + block) > 3900:
-            chunks.append(current_msg.strip())
-            current_msg = block
+        section = block + "\n".join(lines) + "\n\n"
+        if len(current + section) > 3900:
+            chunks.append(current.strip())
+            current = section
         else:
-            current_msg += block
-    if current_msg:
-        chunks.append(current_msg.strip())
+            current += section
+
+    if current:
+        chunks.append(current.strip())
 
     return chunks
 
-# Main app
+# ------------------------ MAIN APP ------------------------
 def main():
+    if not login():
+        return
+
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
     df = load_plot_data().fillna("")
     contacts_df = load_contacts()
 
-    # Sidebar filters
     with st.sidebar:
         st.header("🔍 Filters")
         sector_filter = st.text_input("Sector")
@@ -157,37 +171,41 @@ def main():
         contact_filter = st.text_input("Phone Number")
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
-        unique_names, contact_name_map = build_unique_name_map(df)
-        selected_name = st.selectbox("Dealer Name (from Extracted Name)", [""] + unique_names)
+        # Dealer names from grouped contacts
+        all_numbers = {}
+        for _, row in df.iterrows():
+            name = str(row.get("Extracted Name", "")).strip()
+            numbers = extract_numbers(row.get("Extracted Contact", ""))
+            for n in numbers:
+                if n not in all_numbers:
+                    all_numbers[n] = name
+        dealer_options = sorted(set(all_numbers.values()))
+        selected_dealer = st.selectbox("Dealer Name (Grouped)", [""] + dealer_options)
 
-        contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
-        selected_contact = st.selectbox("📇 Saved Contact (for Filtering)", contact_names)
+        saved_contacts = [""] + sorted(contacts_df["Name"].dropna().unique())
+        selected_contact = st.selectbox("📇 Saved Contact (Grouped)", saved_contacts)
 
     df_filtered = df.copy()
 
-    # Filter by selected dealer name
-    if selected_name:
-        selected_contacts = []
-        for _, row in df.iterrows():
-            if str(row.get("Extracted Name", "")).strip().lower() == selected_name.lower():
-                selected_contacts.extend(extract_numbers(row.get("Extracted Contact", "")))
-        selected_contacts = set(selected_contacts)
+    # Apply dealer grouping filter
+    if selected_dealer:
+        selected_numbers = [k for k, v in all_numbers.items() if v == selected_dealer]
         df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
-            lambda val: any(n in extract_numbers(val) for n in selected_contacts)
+            lambda x: any(n in clean_number(str(x)) for n in selected_numbers)
         )]
 
-    # Filter by saved contact
+    # Apply saved contact filter
     if selected_contact:
         row = contacts_df[contacts_df["Name"] == selected_contact]
-        nums = []
+        contact_nums = []
         for col in ["Contact1", "Contact2", "Contact3"]:
-            if col in row.columns and pd.notna(row[col].values[0]):
-                nums.append(clean_number(row[col].values[0]))
-        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
-            lambda val: any(n in extract_numbers(val) for n in nums)
-        )]
+            if col in row.columns:
+                contact_nums.extend(extract_numbers(row[col].values[0]))
+        if contact_nums:
+            df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
+                lambda x: any(n in clean_number(str(x)) for n in contact_nums)
+            )]
 
-    # Apply other filters
     if sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
     if plot_size_filter:
@@ -198,9 +216,7 @@ def main():
         df_filtered = df_filtered[df_filtered["Plot No"].str.contains(plot_no_filter, case=False, na=False)]
     if contact_filter:
         cnum = clean_number(contact_filter)
-        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
-            lambda val: cnum in clean_number(val)
-        )]
+        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(lambda x: cnum in clean_number(str(x)))]
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
@@ -210,11 +226,12 @@ def main():
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
 
-    selected_name_whatsapp = st.selectbox("📱 Select Contact to Message", contact_names, key="wa_contact")
+    selected_name_whatsapp = st.selectbox("📱 Select Contact to Message", saved_contacts, key="wa_contact")
     manual_number = st.text_input("Or Enter WhatsApp Number (e.g. 0300xxxxxxx)")
 
     if st.button("Generate WhatsApp Message"):
         cleaned = ""
+
         if manual_number:
             cleaned = clean_number(manual_number)
         elif selected_name_whatsapp:
