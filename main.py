@@ -12,7 +12,7 @@ CONTACTS_SHEET = "Contacts"
 
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
-# Utility: Clean number
+# Clean number
 def clean_number(num):
     return re.sub(r"[^\d]", "", str(num or ""))
 
@@ -39,35 +39,45 @@ def load_contacts():
     data = sheet.get_all_records()
     return pd.DataFrame(data)
 
-# Filter by recent date
+# Extract all phone numbers from a cell
+def extract_numbers(text):
+    if not text:
+        return []
+    parts = re.split(r"[,\s]+", text)
+    return [clean_number(p) for p in parts if clean_number(p).startswith("03") or clean_number(p).startswith("923")]
+
+# Group dealer names by contacts
+def build_unique_name_map(df):
+    contact_name_map = {}
+    for _, row in df.iterrows():
+        name = str(row.get("Extracted Name") or "").strip()
+        contact_field = str(row.get("Extracted Contact") or "")
+        numbers = extract_numbers(contact_field)
+        for num in numbers:
+            if num not in contact_name_map:
+                contact_name_map[num] = name
+    # Now reduce name list based on unique numbers
+    name_groups = {}
+    for num, name in contact_name_map.items():
+        if name not in name_groups.values():
+            name_groups[num] = name
+    return sorted(set(name_groups.values())), contact_name_map
+
+# Date filter
 def filter_by_date(df, label):
     if label == "All":
         return df
     days_map = {"Last 7 Days": 7, "Last 15 Days": 15, "Last 30 Days": 30, "Last 2 Months": 60}
-    days = days_map.get(label, 0)
-    cutoff = datetime.now() - timedelta(days=days)
+    cutoff = datetime.now() - timedelta(days=days_map.get(label, 0))
 
-    def try_parse(val):
+    def parse_date(val):
         try:
             return datetime.strptime(val.strip(), "%Y-%m-%d %H:%M:%S")
         except:
             return None
 
-    df["ParsedDate"] = df["Timestamp"].apply(try_parse)
+    df["ParsedDate"] = df["Timestamp"].apply(parse_date)
     return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
-
-# Group dealer names by Extracted Contact (merge typos)
-def group_dealer_names(df):
-    name_by_number = {}
-    for _, row in df.iterrows():
-        name = str(row.get("Sender Name") or row.get("Extracted Name", "")).strip()
-        contacts = str(row.get("Extracted Contact", "")).split(",")
-        contacts = [clean_number(c.split("-")[0]) for c in contacts if clean_number(c)]
-
-        for num in contacts:
-            if num not in name_by_number:
-                name_by_number[num] = name
-    return sorted(set(name_by_number.values()))
 
 # Sector matching logic
 def sector_matches(filter_val, cell_val):
@@ -75,16 +85,7 @@ def sector_matches(filter_val, cell_val):
         return True
     f = filter_val.replace(" ", "").upper()
     c = str(cell_val).replace(" ", "").upper()
-    if "/" in f:
-        return f == c
     return f in c
-
-# Extract plot number for sorting
-def extract_plot_number(val):
-    try:
-        return int(re.search(r"\d+", str(val)).group())
-    except:
-        return float('inf')
 
 # Generate WhatsApp messages
 def generate_whatsapp_messages(df):
@@ -102,7 +103,6 @@ def generate_whatsapp_messages(df):
             continue
         if not (sector and plot_no and plot_size and demand):
             continue
-
         filtered.append({
             "Sector": sector,
             "Street No": street,
@@ -111,37 +111,34 @@ def generate_whatsapp_messages(df):
             "Demand": demand
         })
 
-    seen = set()
-    unique = []
-    for row in filtered:
-        key = (row["Sector"], row["Plot No"], row["Plot Size"], row["Demand"])
-        if key not in seen:
-            seen.add(key)
-            unique.append(row)
+    # Sort by numeric plot number
+    def extract_plot_number(pn):
+        try:
+            return int(re.search(r"\d+", pn).group())
+        except:
+            return float("inf")
+
+    filtered.sort(key=lambda r: extract_plot_number(r["Plot No"]))
 
     grouped = {}
-    for row in unique:
+    for row in filtered:
         key = (row["Sector"], row["Plot Size"])
         grouped.setdefault(key, []).append(row)
 
-    message_chunks = []
+    chunks = []
     current_msg = ""
-
     for (sector, size), items in grouped.items():
-        sorted_items = sorted(items, key=lambda x: extract_plot_number(x["Plot No"]))
-        lines = [f"P: {r['Plot No']} | S: {r['Plot Size']} | D: {r['Demand']}" for r in sorted_items]
+        lines = [f"P: {r['Plot No']} | S: {r['Plot Size']} | D: {r['Demand']}" for r in items]
         block = f"*Available Options in {sector} Size: {size}*\n" + "\n".join(lines) + "\n\n"
-
         if len(current_msg + block) > 3900:
-            message_chunks.append(current_msg.strip())
+            chunks.append(current_msg.strip())
             current_msg = block
         else:
             current_msg += block
-
     if current_msg:
-        message_chunks.append(current_msg.strip())
+        chunks.append(current_msg.strip())
 
-    return message_chunks
+    return chunks
 
 # Main app
 def main():
@@ -150,6 +147,7 @@ def main():
     df = load_plot_data().fillna("")
     contacts_df = load_contacts()
 
+    # Sidebar filters
     with st.sidebar:
         st.header("🔍 Filters")
         sector_filter = st.text_input("Sector")
@@ -159,41 +157,37 @@ def main():
         contact_filter = st.text_input("Phone Number")
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
-        # Grouped Dealer Names (based on contact)
-        dealer_names_grouped = [""] + group_dealer_names(df)
-        selected_dealer_name = st.selectbox("Dealer Name (Grouped)", dealer_names_grouped)
+        unique_names, contact_name_map = build_unique_name_map(df)
+        selected_name = st.selectbox("Dealer Name (from Extracted Name)", [""] + unique_names)
 
         contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
-        selected_contact = st.selectbox("📇 Saved Contacts (for Filtering)", contact_names)
+        selected_contact = st.selectbox("📇 Saved Contact (for Filtering)", contact_names)
 
     df_filtered = df.copy()
 
-    # Filter by grouped dealer name
-    if selected_dealer_name:
-        contact_nums = []
+    # Filter by selected dealer name
+    if selected_name:
+        selected_contacts = []
         for _, row in df.iterrows():
-            name = str(row.get("Sender Name") or row.get("Extracted Name", "")).strip()
-            if name == selected_dealer_name:
-                contact_nums += [clean_number(c.split("-")[0]) for c in str(row.get("Extracted Contact", "")).split(",") if clean_number(c)]
-        contact_nums = list(set(contact_nums))
-        if contact_nums:
-            df_filtered = df_filtered[df_filtered.apply(
-                lambda r: any(n in clean_number(str(r.get("Extracted Contact", ""))) for n in contact_nums),
-                axis=1
-            )]
+            if str(row.get("Extracted Name", "")).strip().lower() == selected_name.lower():
+                selected_contacts.extend(extract_numbers(row.get("Extracted Contact", "")))
+        selected_contacts = set(selected_contacts)
+        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
+            lambda val: any(n in extract_numbers(val) for n in selected_contacts)
+        )]
 
+    # Filter by saved contact
     if selected_contact:
         row = contacts_df[contacts_df["Name"] == selected_contact]
         nums = []
         for col in ["Contact1", "Contact2", "Contact3"]:
             if col in row.columns and pd.notna(row[col].values[0]):
                 nums.append(clean_number(row[col].values[0]))
-        if nums:
-            df_filtered = df_filtered[df_filtered.apply(
-                lambda r: any(n in clean_number(str(r.get("Sender Number", "")) + str(r.get("Extracted Contact", ""))) for n in nums),
-                axis=1
-            )]
+        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
+            lambda val: any(n in extract_numbers(val) for n in nums)
+        )]
 
+    # Apply other filters
     if sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
     if plot_size_filter:
@@ -204,9 +198,8 @@ def main():
         df_filtered = df_filtered[df_filtered["Plot No"].str.contains(plot_no_filter, case=False, na=False)]
     if contact_filter:
         cnum = clean_number(contact_filter)
-        df_filtered = df_filtered[df_filtered.apply(
-            lambda r: cnum in clean_number(str(r.get("Sender Number", "")) + str(r.get("Extracted Contact", ""))),
-            axis=1
+        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
+            lambda val: cnum in clean_number(val)
         )]
 
     df_filtered = filter_by_date(df_filtered, date_filter)
@@ -222,7 +215,6 @@ def main():
 
     if st.button("Generate WhatsApp Message"):
         cleaned = ""
-
         if manual_number:
             cleaned = clean_number(manual_number)
         elif selected_name_whatsapp:
