@@ -5,43 +5,49 @@ import re
 from datetime import datetime, timedelta
 from oauth2client.service_account import ServiceAccountCredentials
 
-# ------------------ CONFIG ------------------
+# Constants
 SPREADSHEET_NAME = "Al-Jazeera"
 PLOTS_SHEET = "Plots"
 CONTACTS_SHEET = "Contacts"
+
+# Login credentials
 USERNAME = "aljazeera"
 PASSWORD = "H@ri$_980"
 
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
-# ------------------ AUTH ------------------
+# ----------- Utility Functions -----------
+
 def login():
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
 
-    if not st.session_state.logged_in:
-        with st.form("login_form"):
-            st.subheader("🔐 Login Required")
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Login")
-            if submitted:
-                if username == USERNAME and password == PASSWORD:
-                    st.session_state.logged_in = True
-                else:
-                    st.error("❌ Invalid credentials")
-        return False
-    return True
+    if st.session_state.logged_in:
+        return True
 
-# ------------------ HELPERS ------------------
+    with st.form("Login"):
+        st.subheader("🔐 Login Required")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login")
+
+        if submitted:
+            if username == USERNAME and password == PASSWORD:
+                st.session_state.logged_in = True
+                st.experimental_rerun()
+            else:
+                st.error("Invalid credentials.")
+
+    return False
+
 def clean_number(num):
     return re.sub(r"[^\d]", "", str(num or ""))
 
-def extract_numbers(contact_str):
-    if not contact_str:
+def extract_numbers(text):
+    if not text:
         return []
-    parts = re.split(r"[,\s\-]+", str(contact_str))
-    return [clean_number(p) for p in parts if re.match(r"^03\d{9}$", clean_number(p)) or clean_number(p).startswith("92")]
+    parts = re.split(r"[,\s]+", str(text))
+    return [clean_number(p) for p in parts if clean_number(p)]
 
 def get_gsheet_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -52,23 +58,22 @@ def get_gsheet_client():
 def load_plot_data():
     client = get_gsheet_client()
     sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
-    data = sheet.get_all_records()
-    df = pd.DataFrame(data)
+    records = sheet.get_all_records()
+    df = pd.DataFrame(records)
     df["SheetRowNum"] = [i + 2 for i in range(len(df))]
-    return df.fillna("")
+    return df
 
 def load_contacts():
     client = get_gsheet_client()
     sheet = client.open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
     data = sheet.get_all_records()
-    return pd.DataFrame(data).fillna("")
+    return pd.DataFrame(data)
 
 def filter_by_date(df, label):
     if label == "All":
         return df
     days_map = {"Last 7 Days": 7, "Last 15 Days": 15, "Last 30 Days": 30, "Last 2 Months": 60}
-    days = days_map.get(label, 0)
-    cutoff = datetime.now() - timedelta(days=days)
+    cutoff = datetime.now() - timedelta(days=days_map.get(label, 0))
 
     def try_parse(val):
         try:
@@ -79,49 +84,65 @@ def filter_by_date(df, label):
     df["ParsedDate"] = df["Timestamp"].apply(try_parse)
     return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
 
+def build_dealer_groups(df):
+    contact_to_names = {}
+    for _, row in df.iterrows():
+        name = str(row.get("Extracted Name", "")).strip()
+        contacts = extract_numbers(row.get("Extracted Contact", ""))
+        for num in contacts:
+            if num not in contact_to_names:
+                contact_to_names[num] = name.lower()
+
+    # Group by normalized name from contact
+    group_map = {}
+    for num, name in contact_to_names.items():
+        group_map.setdefault(name, set()).add(num)
+
+    name_to_numbers = {}
+    for name, nums in group_map.items():
+        name_to_numbers[name] = list(nums)
+
+    return name_to_numbers
+
 def sector_matches(filter_val, cell_val):
     if not filter_val:
         return True
     f = filter_val.replace(" ", "").upper()
     c = str(cell_val).replace(" ", "").upper()
+    if "/" in f:
+        return f == c
     return f in c
-
-def normalize_plot_no(pn):
-    match = re.search(r'\d+', str(pn))
-    return int(match.group()) if match else float("inf")
 
 def generate_whatsapp_messages(df):
     filtered = []
     for _, row in df.iterrows():
         sector = str(row.get("Sector", "")).strip()
         plot_no = str(row.get("Plot No", "")).strip()
-        if "series" in plot_no.lower():
-            continue
         plot_size = str(row.get("Plot Size", "")).strip()
         demand = str(row.get("Demand", "")).strip()
-        street = str(row.get("Street No", "")).strip()
 
+        if not re.match(r"^[A-Z]-\d+(/\d+)?$", sector):
+            continue
         if not (sector and plot_no and plot_size and demand):
+            continue
+        if "series" in plot_no.lower():
             continue
 
         filtered.append({
             "Sector": sector,
-            "Street No": street,
             "Plot No": plot_no,
             "Plot Size": plot_size,
             "Demand": demand
         })
 
-    seen = set()
-    unique = []
-    for row in filtered:
-        key = (row["Sector"], row["Plot No"], row["Plot Size"], row["Demand"])
-        if key not in seen:
-            seen.add(key)
-            unique.append(row)
+    def plot_sort(val):
+        try:
+            return int(re.search(r"\d+", val).group())
+        except:
+            return float("inf")
 
     grouped = {}
-    for row in unique:
+    for row in filtered:
         key = (row["Sector"], row["Plot Size"])
         grouped.setdefault(key, []).append(row)
 
@@ -129,10 +150,9 @@ def generate_whatsapp_messages(df):
     current_msg = ""
 
     for (sector, size), items in grouped.items():
-        sorted_items = sorted(items, key=lambda x: normalize_plot_no(x["Plot No"]))
+        sorted_items = sorted(items, key=lambda x: plot_sort(x["Plot No"]))
         lines = [f"P: {r['Plot No']} | S: {r['Plot Size']} | D: {r['Demand']}" for r in sorted_items]
         block = f"*Available Options in {sector} Size: {size}*\n" + "\n".join(lines) + "\n\n"
-
         if len(current_msg + block) > 3900:
             message_chunks.append(current_msg.strip())
             current_msg = block
@@ -144,26 +164,17 @@ def generate_whatsapp_messages(df):
 
     return message_chunks
 
+# ----------- Main App -----------
+
 def main():
     if not login():
         return
 
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
-    df = load_plot_data()
+    df = load_plot_data().fillna("")
     contacts_df = load_contacts()
-
-    # Build mapping from contact numbers to name (Extracted Name)
-    number_to_name = {}
-    for _, row in df.iterrows():
-        name = str(row.get("Extracted Name", "")).strip()
-        contacts = extract_numbers(row.get("Extracted Contact", ""))
-        for number in contacts:
-            if number and number not in number_to_name:
-                number_to_name[number] = name
-
-    # Build list of unique names from numbers
-    unique_dealer_names = sorted(set(number_to_name.values()))
+    dealer_groups = build_dealer_groups(df)
 
     with st.sidebar:
         st.header("🔍 Filters")
@@ -174,26 +185,30 @@ def main():
         contact_filter = st.text_input("Phone Number")
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
-        selected_dealer = st.selectbox("Dealer Name", [""] + unique_dealer_names)
-        selected_saved = st.selectbox("📇 Saved Contact", [""] + contacts_df["Name"].dropna().unique().tolist())
+        dealer_names = [""] + sorted(dealer_groups.keys())
+        selected_dealer = st.selectbox("Dealer Name (Grouped by Contact)", dealer_names)
+
+        saved_contacts = [""] + sorted(contacts_df["Name"].dropna().unique())
+        selected_saved_contact = st.selectbox("📇 Saved Contact Filter", saved_contacts)
 
     df_filtered = df.copy()
 
     if selected_dealer:
-        matched_numbers = [num for num, nm in number_to_name.items() if nm == selected_dealer]
-        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
-            lambda x: any(n in clean_number(x) for n in matched_numbers)
-        )]
-
-    if selected_saved:
-        row = contacts_df[contacts_df["Name"] == selected_saved]
-        selected_numbers = []
-        for c in ["Contact1", "Contact2", "Contact3"]:
-            if c in row.columns and pd.notna(row[c].values[0]):
-                selected_numbers.extend(extract_numbers(row[c].values[0]))
+        selected_numbers = dealer_groups.get(selected_dealer, [])
         df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
             lambda x: any(num in clean_number(x) for num in selected_numbers)
         )]
+
+    if selected_saved_contact:
+        row = contacts_df[contacts_df["Name"] == selected_saved_contact]
+        numbers = []
+        for col in ["Contact1", "Contact2", "Contact3"]:
+            if col in row.columns and pd.notna(row[col].values[0]):
+                numbers.append(clean_number(row[col].values[0]))
+        if numbers:
+            df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
+                lambda x: any(num in clean_number(x) for num in numbers)
+            )]
 
     if sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
@@ -215,7 +230,7 @@ def main():
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
 
-    selected_name_whatsapp = st.selectbox("📱 Select Contact to Message", contacts_df["Name"].dropna().tolist(), key="wa_contact")
+    selected_name_whatsapp = st.selectbox("📱 Select Contact to Message", saved_contacts, key="wa_contact")
     manual_number = st.text_input("Or Enter WhatsApp Number (e.g. 0300xxxxxxx)")
 
     if st.button("Generate WhatsApp Message"):
