@@ -10,19 +10,6 @@ SPREADSHEET_NAME = "Al-Jazeera"
 PLOTS_SHEET = "Plots"
 CONTACTS_SHEET = "Contacts"
 
-# Authentication
-def login():
-    st.sidebar.title("🔐 Login Required")
-    username = st.sidebar.text_input("Username")
-    password = st.sidebar.text_input("Password", type="password")
-    if st.sidebar.button("Login"):
-        if username == "aljazeera" and password == "H@ri$_980":
-            st.session_state.logged_in = True
-            st.experimental_rerun()
-        else:
-            st.sidebar.error("Invalid credentials")
-    return st.session_state.get("logged_in", False)
-
 # Setup
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
@@ -98,14 +85,6 @@ def build_name_map(df):
 
     return sorted(name_set.keys()), merged
 
-# Sector match
-def sector_matches(f, c):
-    if not f:
-        return True
-    f = f.replace(" ", "").upper()
-    c = str(c).replace(" ", "").upper()
-    return f in c if "/" not in f else f == c
-
 # WhatsApp messages
 def generate_whatsapp_messages(df):
     filtered = []
@@ -172,7 +151,7 @@ def generate_whatsapp_messages(df):
         messages.append(current.strip())
     return messages
 
-# Sanitize before dataframe display
+# Sanitize for table
 def safe_dataframe(df):
     try:
         df = df.copy()
@@ -187,9 +166,6 @@ def safe_dataframe(df):
 
 # --- Main ---
 def main():
-    if not login():
-        return
-
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
     df = load_plot_data().fillna("")
@@ -226,7 +202,8 @@ def main():
             lambda x: any(n in clean_number(x) for n in selected_contacts))]
 
     if sector_filter:
-        df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
+        df_filtered = df_filtered[df_filtered["Sector"].astype(str).str.upper().str.replace(" ", "").str.contains(sector_filter.replace(" ", "").upper())]
+
     if plot_size_filter:
         df_filtered = df_filtered[df_filtered["Plot Size"].str.contains(plot_size_filter, case=False, na=False)]
     if street_filter:
