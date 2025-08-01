@@ -85,6 +85,14 @@ def build_name_map(df):
 
     return sorted(name_set.keys()), merged
 
+# Sector match
+def sector_matches(f, c):
+    if not f:
+        return True
+    f = f.replace(" ", "").upper()
+    c = str(c).replace(" ", "").upper()
+    return f in c if "/" not in f else f == c
+
 # WhatsApp messages
 def generate_whatsapp_messages(df):
     filtered = []
@@ -133,7 +141,11 @@ def generate_whatsapp_messages(df):
     current = ""
 
     for (sector, size), listings in grouped.items():
-        listings = sorted(listings, key=lambda x: get_sort_key(x["Plot No"]))
+        if sector.startswith("I-15/"):
+            listings = sorted(listings, key=lambda x: (get_sort_key(x["Street No"]), get_sort_key(x["Plot No"])))
+        else:
+            listings = sorted(listings, key=lambda x: get_sort_key(x["Plot No"]))
+
         lines = []
         for r in listings:
             if sector.startswith("I-15/"):
@@ -151,7 +163,7 @@ def generate_whatsapp_messages(df):
         messages.append(current.strip())
     return messages
 
-# Sanitize for table
+# Sanitize before dataframe display
 def safe_dataframe(df):
     try:
         df = df.copy()
@@ -202,8 +214,7 @@ def main():
             lambda x: any(n in clean_number(x) for n in selected_contacts))]
 
     if sector_filter:
-        df_filtered = df_filtered[df_filtered["Sector"].astype(str).str.upper().str.replace(" ", "").str.contains(sector_filter.replace(" ", "").upper())]
-
+        df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
     if plot_size_filter:
         df_filtered = df_filtered[df_filtered["Plot Size"].str.contains(plot_size_filter, case=False, na=False)]
     if street_filter:
