@@ -163,11 +163,20 @@ def generate_whatsapp_messages(df):
         messages.append(current.strip())
     return messages
 
+# Convert demand to numeric
+def extract_price_in_lac(text):
+    try:
+        # Remove non-numeric characters
+        val = re.sub(r"[^\d.]", "", str(text))
+        return float(val)
+    except:
+        return None
+
 # Sanitize before dataframe display
 def safe_dataframe(df):
     try:
         df = df.copy()
-        df = df.drop(columns=["ParsedDate"], errors="ignore")
+        df = df.drop(columns=["ParsedDate", "NumericDemand"], errors="ignore")
         for col in df.columns:
             if df[col].dtype == "object":
                 df[col] = df[col].astype(str)
@@ -191,6 +200,10 @@ def main():
         plot_no_filter = st.text_input("Plot No")
         contact_filter = st.text_input("Phone Number (03xxxxxxxxx)")
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
+
+        # ✅ New price range filters
+        price_min = st.number_input("Min Price (in Lacs)", value=0, step=5)
+        price_max = st.number_input("Max Price (in Lacs)", value=1000, step=5)
 
         dealer_names, contact_to_name = build_name_map(df)
         selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names)
@@ -221,16 +234,14 @@ def main():
         df_filtered = df_filtered[df_filtered["Street No"].str.contains(street_filter, case=False, na=False)]
     if plot_no_filter:
         df_filtered = df_filtered[df_filtered["Plot No"].str.contains(plot_no_filter, case=False, na=False)]
-
-    # ✅ FIXED PHONE NUMBER FILTER
     if contact_filter:
         cnum = clean_number(contact_filter)
-        if cnum.startswith("03") and len(cnum) == 11:
-            df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
-                lambda x: cnum in extract_numbers(x)
-            )]
-        else:
-            st.warning("⚠️ Enter phone number in 03xxxxxxxxx format.")
+        df_filtered = df_filtered[df_filtered["Extracted Contact"].astype(str).apply(
+            lambda x: any(cnum == clean_number(num) for num in extract_numbers(x)))]
+
+    # ✅ Apply price filter
+    df_filtered["NumericDemand"] = df_filtered["Demand"].apply(extract_price_in_lac)
+    df_filtered = df_filtered[df_filtered["NumericDemand"].between(price_min, price_max, inclusive="both")]
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
