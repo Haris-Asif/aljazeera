@@ -189,7 +189,7 @@ def main():
         plot_size_filter = st.text_input("Plot Size")
         street_filter = st.text_input("Street No")
         plot_no_filter = st.text_input("Plot No")
-        contact_filter = st.text_input("Phone Number")
+        contact_filter = st.text_input("Phone Number (03xxxxxxxxx)")
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
         dealer_names, contact_to_name = build_name_map(df)
@@ -221,9 +221,16 @@ def main():
         df_filtered = df_filtered[df_filtered["Street No"].str.contains(street_filter, case=False, na=False)]
     if plot_no_filter:
         df_filtered = df_filtered[df_filtered["Plot No"].str.contains(plot_no_filter, case=False, na=False)]
+
+    # ✅ FIXED PHONE NUMBER FILTER
     if contact_filter:
         cnum = clean_number(contact_filter)
-        df_filtered = df_filtered[df_filtered["Extracted Contact"].astype(str).apply(lambda x: cnum in clean_number(x))]
+        if cnum.startswith("03") and len(cnum) == 11:
+            df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
+                lambda x: cnum in extract_numbers(x)
+            )]
+        else:
+            st.warning("⚠️ Enter phone number in 03xxxxxxxxx format.")
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
