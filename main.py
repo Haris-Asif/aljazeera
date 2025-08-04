@@ -39,14 +39,12 @@ def feature_matches(row_features, search_term):
     matches = difflib.get_close_matches(search_term.lower(), row_features, n=1, cutoff=0.7)
     return bool(matches)
 
-# Google Sheets client
 def get_gsheet_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = st.secrets["gcp_service_account"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
-# Load data
 def load_plot_data():
     sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
     df = pd.DataFrame(sheet.get_all_records())
@@ -112,6 +110,14 @@ def safe_dataframe(df):
         st.error(f"⚠️ Error displaying table: {e}")
         return pd.DataFrame()
 
+def create_whatsapp_link(contact, message):
+    contact = clean_number(contact)
+    if len(contact) == 10:
+        contact = "92" + contact  # Assume it's a Pakistani number missing the +92
+    elif contact.startswith("03") and len(contact) == 11:
+        contact = "92" + contact[1:]
+    return f"https://wa.me/{contact}?text={message.replace(' ', '%20')}"
+
 # --- Streamlit App ---
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
@@ -170,7 +176,7 @@ def main():
     df_filtered = df_filtered[df_filtered["ParsedPrice"].notnull()]
     df_filtered = df_filtered[(df_filtered["ParsedPrice"] >= price_from) & (df_filtered["ParsedPrice"] <= price_to)]
 
-    # Feature filtering with fuzzy matching
+    # Feature filter
     if feature_filter:
         df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: feature_matches(x, feature_filter))]
 
@@ -178,6 +184,31 @@ def main():
 
     st.subheader("📋 Filtered Listings")
     st.dataframe(safe_dataframe(df_filtered))
+
+    # WhatsApp message generator
+    st.subheader("📱 WhatsApp Message Generator")
+    contact_input = st.text_input("Phone number (03xxxxxxxxx or with country code)")
+    message_input = st.text_area("Message")
+
+    if st.button("Generate WhatsApp Link"):
+        if contact_input and message_input:
+            url = create_whatsapp_link(contact_input, message_input)
+            st.markdown(f"[Click here to send message via WhatsApp]({url})")
+        else:
+            st.warning("Please enter both phone number and message.")
+
+    # Add new contact form
+    st.subheader("➕ Add Contact to Saved List")
+    with st.form("add_contact_form"):
+        new_name = st.text_input("Name")
+        new_contact1 = st.text_input("Contact 1")
+        new_contact2 = st.text_input("Contact 2")
+        new_contact3 = st.text_input("Contact 3")
+        submitted = st.form_submit_button("Add to Contacts")
+        if submitted and new_name and new_contact1:
+            sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
+            sheet.append_row([new_name, new_contact1, new_contact2, new_contact3])
+            st.success(f"Contact '{new_name}' added successfully!")
 
 if __name__ == "__main__":
     main()
