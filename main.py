@@ -14,7 +14,7 @@ CONTACTS_SHEET = "Contacts"
 # Streamlit setup
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
-# Helper functions
+# Helpers
 def clean_number(num):
     return re.sub(r"[^\d]", "", str(num or ""))
 
@@ -39,6 +39,7 @@ def feature_matches(row_features, search_term):
     matches = difflib.get_close_matches(search_term.lower(), row_features, n=1, cutoff=0.7)
     return bool(matches)
 
+# Google Sheets
 def get_gsheet_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = st.secrets["gcp_service_account"]
@@ -101,7 +102,7 @@ def sector_matches(f, c):
 def safe_dataframe(df):
     try:
         df = df.copy()
-        df = df.drop(columns=["ParsedDate"], errors="ignore")
+        df = df.drop(columns=["ParsedDate", "ParsedPrice"], errors="ignore")
         for col in df.columns:
             if df[col].dtype == "object":
                 df[col] = df[col].astype(str)
@@ -110,13 +111,75 @@ def safe_dataframe(df):
         st.error(f"⚠️ Error displaying table: {e}")
         return pd.DataFrame()
 
-def create_whatsapp_link(contact, message):
-    contact = clean_number(contact)
-    if len(contact) == 10:
-        contact = "92" + contact  # Assume it's a Pakistani number missing the +92
-    elif contact.startswith("03") and len(contact) == 11:
-        contact = "92" + contact[1:]
-    return f"https://wa.me/{contact}?text={message.replace(' ', '%20')}"
+# WhatsApp message generation
+def generate_whatsapp_messages(df):
+    filtered = []
+    for _, row in df.iterrows():
+        sector = str(row.get("Sector", "")).strip()
+        plot_no = str(row.get("Plot No", "")).strip()
+        size = str(row.get("Plot Size", "")).strip()
+        price = str(row.get("Demand", "")).strip()
+        street = str(row.get("Street No", "")).strip()
+
+        if not (sector and plot_no and size and price):
+            continue
+        if "I-15/" in sector and not street:
+            continue
+        if "series" in plot_no.lower():
+            continue
+
+        filtered.append({
+            "Sector": sector,
+            "Plot No": plot_no,
+            "Plot Size": size,
+            "Demand": price,
+            "Street No": street
+        })
+
+    seen = set()
+    unique = []
+    for row in filtered:
+        key = (row["Sector"], row["Plot No"], row["Plot Size"], row["Demand"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(row)
+
+    grouped = {}
+    for row in unique:
+        key = (row["Sector"], row["Plot Size"])
+        grouped.setdefault(key, []).append(row)
+
+    def get_sort_key(val):
+        try:
+            return int(re.search(r"\d+", val).group())
+        except:
+            return float("inf")
+
+    messages = []
+    current = ""
+
+    for (sector, size), listings in grouped.items():
+        if sector.startswith("I-15/"):
+            listings = sorted(listings, key=lambda x: (get_sort_key(x["Street No"]), get_sort_key(x["Plot No"])))
+        else:
+            listings = sorted(listings, key=lambda x: get_sort_key(x["Plot No"]))
+
+        lines = []
+        for r in listings:
+            if sector.startswith("I-15/"):
+                lines.append(f"St: {r['Street No']} | P: {r['Plot No']} | S: {r['Plot Size']} | D: {r['Demand']}")
+            else:
+                lines.append(f"P: {r['Plot No']} | S: {r['Plot Size']} | D: {r['Demand']}")
+        block = f"*Available Options in {sector} Size: {size}*\n" + "\n".join(lines) + "\n\n"
+        if len(current + block) > 3900:
+            messages.append(current.strip())
+            current = block
+        else:
+            current += block
+
+    if current:
+        messages.append(current.strip())
+    return messages
 
 # --- Streamlit App ---
 def main():
@@ -171,12 +234,10 @@ def main():
         df_filtered = df_filtered[df_filtered["Extracted Contact"].astype(str).apply(
             lambda x: any(cnum == clean_number(p) for p in x.split(",")))]
 
-    # Price filtering
     df_filtered["ParsedPrice"] = df_filtered["Demand"].apply(parse_price)
     df_filtered = df_filtered[df_filtered["ParsedPrice"].notnull()]
     df_filtered = df_filtered[(df_filtered["ParsedPrice"] >= price_from) & (df_filtered["ParsedPrice"] <= price_to)]
 
-    # Feature filter
     if feature_filter:
         df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: feature_matches(x, feature_filter))]
 
@@ -185,30 +246,44 @@ def main():
     st.subheader("📋 Filtered Listings")
     st.dataframe(safe_dataframe(df_filtered))
 
-    # WhatsApp message generator
-    st.subheader("📱 WhatsApp Message Generator")
-    contact_input = st.text_input("Phone number (03xxxxxxxxx or with country code)")
-    message_input = st.text_area("Message")
+    st.markdown("---")
+    st.subheader("📤 Send WhatsApp Message")
 
-    if st.button("Generate WhatsApp Link"):
-        if contact_input and message_input:
-            url = create_whatsapp_link(contact_input, message_input)
-            st.markdown(f"[Click here to send message via WhatsApp]({url})")
+    selected_name_whatsapp = st.selectbox("📱 Select Contact to Message", contact_names, key="wa_contact")
+    manual_number = st.text_input("Or Enter WhatsApp Number (e.g. 0300xxxxxxx)")
+
+    if st.button("Generate WhatsApp Message"):
+        cleaned = ""
+        if manual_number:
+            cleaned = clean_number(manual_number)
+        elif selected_name_whatsapp:
+            row = contacts_df[contacts_df["Name"] == selected_name_whatsapp]
+            numbers = [clean_number(row[c].values[0]) for c in ["Contact1", "Contact2", "Contact3"]
+                       if c in row.columns and pd.notna(row[c].values[0])]
+            cleaned = numbers[0] if numbers else ""
+
+        if not cleaned:
+            st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
+            return
+
+        if len(cleaned) == 10 and cleaned.startswith("3"):
+            wa_number = "92" + cleaned
+        elif len(cleaned) == 11 and cleaned.startswith("03"):
+            wa_number = "92" + cleaned[1:]
+        elif len(cleaned) == 12 and cleaned.startswith("92"):
+            wa_number = cleaned
         else:
-            st.warning("Please enter both phone number and message.")
+            st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
+            return
 
-    # Add new contact form
-    st.subheader("➕ Add Contact to Saved List")
-    with st.form("add_contact_form"):
-        new_name = st.text_input("Name")
-        new_contact1 = st.text_input("Contact 1")
-        new_contact2 = st.text_input("Contact 2")
-        new_contact3 = st.text_input("Contact 3")
-        submitted = st.form_submit_button("Add to Contacts")
-        if submitted and new_name and new_contact1:
-            sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
-            sheet.append_row([new_name, new_contact1, new_contact2, new_contact3])
-            st.success(f"Contact '{new_name}' added successfully!")
+        messages = generate_whatsapp_messages(df_filtered)
+        if not messages:
+            st.warning("⚠️ No valid listings to include.")
+        else:
+            for i, msg in enumerate(messages):
+                encoded = msg.replace(" ", "%20").replace("\n", "%0A")
+                link = f"https://wa.me/{wa_number}?text={encoded}"
+                st.markdown(f"[📩 Send Message {i+1}]({link})", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
