@@ -14,7 +14,7 @@ CONTACTS_SHEET = "Contacts"
 # Streamlit setup
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
-# Helpers
+# --- Helpers ---
 def clean_number(num):
     return re.sub(r"[^\d]", "", str(num or ""))
 
@@ -31,13 +31,20 @@ def parse_price(price_str):
     except:
         return None
 
-def feature_matches(row_features, search_term):
-    if not search_term:
-        return True
-    row_features = str(row_features or "").lower().split(",")
-    row_features = [f.strip() for f in row_features if f.strip()]
-    matches = difflib.get_close_matches(search_term.lower(), row_features, n=1, cutoff=0.7)
-    return bool(matches)
+def get_all_unique_features(df):
+    feature_set = set()
+    for f in df["Features"].fillna("").astype(str):
+        parts = [p.strip().lower() for p in f.split(",") if p.strip()]
+        feature_set.update(parts)
+    return sorted(feature_set)
+
+def fuzzy_feature_match(row_features, selected_features):
+    row_features = [f.strip().lower() for f in str(row_features or "").split(",")]
+    for sel in selected_features:
+        match = difflib.get_close_matches(sel.lower(), row_features, n=1, cutoff=0.7)
+        if match:
+            return True
+    return False
 
 # Google Sheets
 def get_gsheet_client():
@@ -111,7 +118,7 @@ def safe_dataframe(df):
         st.error(f"⚠️ Error displaying table: {e}")
         return pd.DataFrame()
 
-# WhatsApp message generation
+# WhatsApp message generation (unchanged)
 def generate_whatsapp_messages(df):
     filtered = []
     for _, row in df.iterrows():
@@ -188,6 +195,8 @@ def main():
     df = load_plot_data().fillna("")
     contacts_df = load_contacts()
 
+    all_features = get_all_unique_features(df)
+
     with st.sidebar:
         st.header("🔍 Filters")
         sector_filter = st.text_input("Sector")
@@ -197,7 +206,7 @@ def main():
         contact_filter = st.text_input("Phone Number (03xxxxxxxxx)")
         price_from = st.number_input("Price From (in Lacs)", min_value=0.0, value=0.0, step=1.0)
         price_to = st.number_input("Price To (in Lacs)", min_value=0.0, value=1000.0, step=1.0)
-        feature_filter = st.text_input("Features (e.g. corner, main road, etc.)")
+        selected_features = st.multiselect("Select Feature(s)", options=all_features)
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
         dealer_names, contact_to_name = build_name_map(df)
@@ -238,8 +247,8 @@ def main():
     df_filtered = df_filtered[df_filtered["ParsedPrice"].notnull()]
     df_filtered = df_filtered[(df_filtered["ParsedPrice"] >= price_from) & (df_filtered["ParsedPrice"] <= price_to)]
 
-    if feature_filter:
-        df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: feature_matches(x, feature_filter))]
+    if selected_features:
+        df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match(x, selected_features))]
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
