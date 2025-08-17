@@ -118,7 +118,7 @@ def safe_dataframe(df):
         st.error(f"⚠️ Error displaying table: {e}")
         return pd.DataFrame()
 
-# WhatsApp message generation (unchanged)
+# WhatsApp message generation (fixed)
 def generate_whatsapp_messages(df):
     filtered = []
     for _, row in df.iterrows():
@@ -167,7 +167,8 @@ def generate_whatsapp_messages(df):
 
     for (sector, size), listings in grouped.items():
         if sector.startswith("I-15/"):
-            listings = sorted(listings, key=lambda x: (get_sort_key(x["Street No"]), get_sort_key(x["Plot No"]))
+            # Fixed the sorting line here
+            listings = sorted(listings, key=lambda x: (get_sort_key(x["Street No"]), get_sort_key(x["Plot No"])))
         else:
             listings = sorted(listings, key=lambda x: get_sort_key(x["Plot No"]))
 
@@ -243,7 +244,8 @@ def main():
         row = contacts_df[contacts_df["Name"] == selected_saved]
         selected_contacts = []
         for col in ["Contact1", "Contact2", "Contact3"]:
-            selected_contacts.extend(extract_numbers(row.get(col, "")))
+            if col in row.columns and pd.notna(row[col].values[0]):
+                selected_contacts.extend(extract_numbers(row[col].values[0]))
         df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
             lambda x: any(n in clean_number(x) for n in selected_contacts))]
 
@@ -322,8 +324,10 @@ def main():
             cleaned = clean_number(manual_number)
         elif selected_name_whatsapp:
             row = contacts_df[contacts_df["Name"] == selected_name_whatsapp]
-            numbers = [clean_number(row[c].values[0]) for c in ["Contact1", "Contact2", "Contact3"]
-                       if c in row.columns and pd.notna(row[c].values[0])]
+            numbers = []
+            for c in ["Contact1", "Contact2", "Contact3"]:
+                if c in row.columns and pd.notna(row[c].values[0]):
+                    numbers.append(clean_number(row[c].values[0]))
             cleaned = numbers[0] if numbers else ""
 
         if not cleaned:
