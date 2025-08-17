@@ -3,6 +3,7 @@ import pandas as pd
 import gspread
 import re
 import difflib
+import numpy as np
 from datetime import datetime, timedelta
 from oauth2client.service_account import ServiceAccountCredentials
 
@@ -206,6 +207,30 @@ def delete_rows_from_sheet(row_numbers):
         st.error(f"Error deleting rows: {str(e)}")
         return False
 
+# Function to create grouped view with colors
+def create_grouped_view(df):
+    if df.empty:
+        return df
+    
+    # Create a key for grouping
+    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
+    
+    # Map each group to a unique color
+    unique_groups = df["GroupKey"].unique()
+    color_map = {}
+    colors = ["#FFCCCC", "#CCFFCC", "#CCCCFF", "#FFFFCC", "#FFCCFF", "#CCFFFF", "#FFE5CC", "#E5CCFF"]
+    
+    for i, group in enumerate(unique_groups):
+        color_map[group] = colors[i % len(colors)]
+    
+    # Apply colors to DataFrame
+    def apply_row_color(row):
+        return [f"background-color: {color_map[row['GroupKey']]}"] * len(row)
+    
+    # Create styled DataFrame
+    styled_df = df.style.apply(apply_row_color, axis=1)
+    return styled_df
+
 # --- Streamlit App ---
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
@@ -273,6 +298,11 @@ def main():
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
+    # Move Timestamp column to the end
+    if "Timestamp" in df_filtered.columns:
+        cols = [col for col in df_filtered.columns if col != "Timestamp"] + ["Timestamp"]
+        df_filtered = df_filtered[cols]
+
     st.subheader("📋 Filtered Listings")
     
     # Row selection and deletion feature
@@ -314,6 +344,26 @@ def main():
                     st.rerun()
     else:
         st.info("No listings match your filters")
+    
+    st.markdown("---")
+    st.subheader("👥 Grouped Listings by Sector, Plot No, Street No, and Plot Size")
+    
+    # Create and display grouped view with colors
+    if not df_filtered.empty:
+        # Create a copy for display
+        grouped_df = df_filtered.copy()
+        
+        # Generate styled DataFrame with color groups
+        styled_grouped_df = create_grouped_view(grouped_df)
+        
+        # Display the styled DataFrame
+        st.dataframe(
+            styled_grouped_df,
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("No listings to group")
 
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
