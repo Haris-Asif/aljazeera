@@ -56,7 +56,7 @@ def get_gsheet_client():
 def load_plot_data():
     sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
     df = pd.DataFrame(sheet.get_all_records())
-    df["SheetRowNum"] = [i + 2 for i in range(len(df))]
+    df["SheetRowNum"] = [i + 2 for i in range(len(df))]  # Start from row 2
     return df
 
 def load_contacts():
@@ -118,7 +118,7 @@ def safe_dataframe(df):
         st.error(f"⚠️ Error displaying table: {e}")
         return pd.DataFrame()
 
-# WhatsApp message generation (fixed)
+# WhatsApp message generation
 def generate_whatsapp_messages(df):
     filtered = []
     for _, row in df.iterrows():
@@ -167,8 +167,7 @@ def generate_whatsapp_messages(df):
 
     for (sector, size), listings in grouped.items():
         if sector.startswith("I-15/"):
-            # Fixed the sorting line here
-            listings = sorted(listings, key=lambda x: (get_sort_key(x["Street No"]), get_sort_key(x["Plot No"])))
+            listings = sorted(listings, key=lambda x: (get_sort_key(x["Street No"]), get_sort_key(x["Plot No"]))
         else:
             listings = sorted(listings, key=lambda x: get_sort_key(x["Plot No"]))
 
@@ -189,7 +188,7 @@ def generate_whatsapp_messages(df):
         messages.append(current.strip())
     return messages
 
-# --- NEW FUNCTION: Delete rows from Google Sheet ---
+# Delete rows from Google Sheet
 def delete_rows_from_sheet(row_numbers):
     """Delete specified rows from Google Sheet"""
     try:
@@ -198,7 +197,9 @@ def delete_rows_from_sheet(row_numbers):
         
         # Delete rows in descending order to avoid index shifting
         for row_num in sorted(row_numbers, reverse=True):
-            sheet.delete_rows(row_num)
+            # Ensure we're not deleting the header row
+            if row_num > 1:
+                sheet.delete_rows(row_num)
             
         return True
     except Exception as e:
@@ -241,11 +242,12 @@ def main():
             lambda x: any(c in clean_number(x) for c in selected_contacts))]
 
     if selected_saved:
-        row = contacts_df[contacts_df["Name"] == selected_saved]
+        row = contacts_df[contacts_df["Name"] == selected_saved].iloc[0] if not contacts_df[contacts_df["Name"] == selected_saved].empty else None
         selected_contacts = []
-        for col in ["Contact1", "Contact2", "Contact3"]:
-            if col in row.columns and pd.notna(row[col].values[0]):
-                selected_contacts.extend(extract_numbers(row[col].values[0]))
+        if row is not None:
+            for col in ["Contact1", "Contact2", "Contact3"]:
+                if col in row and pd.notna(row[col]):
+                    selected_contacts.extend(extract_numbers(row[col]))
         df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
             lambda x: any(n in clean_number(x) for n in selected_contacts))]
 
@@ -273,7 +275,7 @@ def main():
 
     st.subheader("📋 Filtered Listings")
     
-    # --- NEW: Row selection and deletion feature ---
+    # Row selection and deletion feature
     if not df_filtered.empty:
         # Create a copy for display with selection column
         display_df = df_filtered.copy().reset_index(drop=True)
@@ -307,6 +309,7 @@ def main():
                 
                 if success:
                     st.success(f"✅ Successfully deleted {len(selected_rows)} row(s)!")
+                    # Clear cache and refresh
                     st.cache_data.clear()
                     st.experimental_rerun()
     else:
@@ -323,12 +326,14 @@ def main():
         if manual_number:
             cleaned = clean_number(manual_number)
         elif selected_name_whatsapp:
-            row = contacts_df[contacts_df["Name"] == selected_name_whatsapp]
-            numbers = []
-            for c in ["Contact1", "Contact2", "Contact3"]:
-                if c in row.columns and pd.notna(row[c].values[0]):
-                    numbers.append(clean_number(row[c].values[0]))
-            cleaned = numbers[0] if numbers else ""
+            contact_row = contacts_df[contacts_df["Name"] == selected_name_whatsapp]
+            if not contact_row.empty:
+                row = contact_row.iloc[0]
+                numbers = []
+                for col in ["Contact1", "Contact2", "Contact3"]:
+                    if col in row and pd.notna(row[col]):
+                        numbers.append(clean_number(row[col]))
+                cleaned = numbers[0] if numbers else ""
 
         if not cleaned:
             st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
