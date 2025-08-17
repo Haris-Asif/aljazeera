@@ -167,7 +167,7 @@ def generate_whatsapp_messages(df):
 
     for (sector, size), listings in grouped.items():
         if sector.startswith("I-15/"):
-            listings = sorted(listings, key=lambda x: (get_sort_key(x["Street No"]), get_sort_key(x["Plot No"]))
+            listings = sorted(listings, key=lambda x: (get_sort_key(x["Street No"]), get_sort_key(x["Plot No"])))
         else:
             listings = sorted(listings, key=lambda x: get_sort_key(x["Plot No"]))
 
