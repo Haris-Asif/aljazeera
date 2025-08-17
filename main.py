@@ -167,7 +167,7 @@ def generate_whatsapp_messages(df):
 
     for (sector, size), listings in grouped.items():
         if sector.startswith("I-15/"):
-            listings = sorted(listings, key=lambda x: (get_sort_key(x["Street No"]), get_sort_key(x["Plot No"])))
+            listings = sorted(listings, key=lambda x: (get_sort_key(x["Street No"]), get_sort_key(x["Plot No"]))
         else:
             listings = sorted(listings, key=lambda x: get_sort_key(x["Plot No"]))
 
@@ -188,10 +188,27 @@ def generate_whatsapp_messages(df):
         messages.append(current.strip())
     return messages
 
+# --- NEW FUNCTION: Delete rows from Google Sheet ---
+def delete_rows_from_sheet(row_numbers):
+    """Delete specified rows from Google Sheet"""
+    try:
+        client = get_gsheet_client()
+        sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
+        
+        # Delete rows in descending order to avoid index shifting
+        for row_num in sorted(row_numbers, reverse=True):
+            sheet.delete_rows(row_num)
+            
+        return True
+    except Exception as e:
+        st.error(f"Error deleting rows: {str(e)}")
+        return False
+
 # --- Streamlit App ---
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
+    # Load data
     df = load_plot_data().fillna("")
     contacts_df = load_contacts()
 
@@ -253,7 +270,45 @@ def main():
     df_filtered = filter_by_date(df_filtered, date_filter)
 
     st.subheader("📋 Filtered Listings")
-    st.dataframe(safe_dataframe(df_filtered))
+    
+    # --- NEW: Row selection and deletion feature ---
+    if not df_filtered.empty:
+        # Create a copy for display with selection column
+        display_df = df_filtered.copy().reset_index(drop=True)
+        display_df.insert(0, "Select", False)
+        
+        # Configure columns for data editor
+        column_config = {
+            "Select": st.column_config.CheckboxColumn(required=True),
+            "SheetRowNum": st.column_config.NumberColumn(disabled=True)
+        }
+        
+        # Display editable dataframe with checkboxes
+        edited_df = st.data_editor(
+            display_df,
+            column_config=column_config,
+            hide_index=True,
+            use_container_width=True,
+            disabled=display_df.columns.difference(["Select"]).tolist()
+        )
+        
+        # Get selected rows
+        selected_rows = edited_df[edited_df["Select"]]
+        
+        if not selected_rows.empty:
+            st.markdown(f"**{len(selected_rows)} row(s) selected**")
+            
+            # Show delete confirmation
+            if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_button"):
+                row_nums = selected_rows["SheetRowNum"].tolist()
+                success = delete_rows_from_sheet(row_nums)
+                
+                if success:
+                    st.success(f"✅ Successfully deleted {len(selected_rows)} row(s)!")
+                    st.cache_data.clear()
+                    st.experimental_rerun()
+    else:
+        st.info("No listings match your filters")
 
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
