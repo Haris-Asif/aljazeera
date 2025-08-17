@@ -311,7 +311,7 @@ def main():
                     st.success(f"✅ Successfully deleted {len(selected_rows)} row(s)!")
                     # Clear cache and refresh
                     st.cache_data.clear()
-                    st.experimental_rerun()
+                    st.rerun()
     else:
         st.info("No listings match your filters")
 
