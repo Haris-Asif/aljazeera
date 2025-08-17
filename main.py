@@ -215,6 +215,9 @@ def create_grouped_view(df):
     # Create a key for grouping
     df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
     
+    # Sort by group key to cluster matching rows together
+    df = df.sort_values(by="GroupKey")
+    
     # Map each group to a unique color
     unique_groups = df["GroupKey"].unique()
     color_map = {}
@@ -354,6 +357,7 @@ def main():
         grouped_df = df_filtered.copy()
         
         # Generate styled DataFrame with color groups
+        st.info("Rows with matching Sector, Plot No, Street No and Plot Size are grouped together with the same color")
         styled_grouped_df = create_grouped_view(grouped_df)
         
         # Display the styled DataFrame
