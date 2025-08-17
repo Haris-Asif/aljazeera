@@ -3,7 +3,6 @@ import pandas as pd
 import gspread
 import re
 import difflib
-import numpy as np
 from datetime import datetime, timedelta
 from oauth2client.service_account import ServiceAccountCredentials
 
@@ -207,19 +206,29 @@ def delete_rows_from_sheet(row_numbers):
         st.error(f"Error deleting rows: {str(e)}")
         return False
 
-# Function to create grouped view with colors
-def create_grouped_view(df):
+# Function to create grouped view with colors for duplicate entries
+def create_duplicates_view(df):
     if df.empty:
         return df
     
     # Create a key for grouping
     df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
     
+    # Count duplicates per group
+    group_counts = df["GroupKey"].value_counts()
+    
+    # Filter only groups with duplicates (2 or more entries)
+    duplicate_groups = group_counts[group_counts >= 2].index
+    duplicate_df = df[df["GroupKey"].isin(duplicate_groups)]
+    
+    if duplicate_df.empty:
+        return duplicate_df
+    
     # Sort by group key to cluster matching rows together
-    df = df.sort_values(by="GroupKey")
+    duplicate_df = duplicate_df.sort_values(by="GroupKey")
     
     # Map each group to a unique color
-    unique_groups = df["GroupKey"].unique()
+    unique_groups = duplicate_df["GroupKey"].unique()
     color_map = {}
     colors = ["#FFCCCC", "#CCFFCC", "#CCCCFF", "#FFFFCC", "#FFCCFF", "#CCFFFF", "#FFE5CC", "#E5CCFF"]
     
@@ -231,7 +240,7 @@ def create_grouped_view(df):
         return [f"background-color: {color_map[row['GroupKey']]}"] * len(row)
     
     # Create styled DataFrame
-    styled_df = df.style.apply(apply_row_color, axis=1)
+    styled_df = duplicate_df.style.apply(apply_row_color, axis=1)
     return styled_df
 
 # --- Streamlit App ---
@@ -349,25 +358,25 @@ def main():
         st.info("No listings match your filters")
     
     st.markdown("---")
-    st.subheader("👥 Grouped Listings by Sector, Plot No, Street No, and Plot Size")
+    st.subheader("👥 Duplicate Listings (Matching Sector, Plot No, Street No, Plot Size)")
     
-    # Create and display grouped view with colors
+    # Create and display grouped view with colors for duplicates
     if not df_filtered.empty:
-        # Create a copy for display
-        grouped_df = df_filtered.copy()
+        # Generate styled DataFrame with duplicate groups
+        styled_duplicates_df = create_duplicates_view(df_filtered)
         
-        # Generate styled DataFrame with color groups
-        st.info("Rows with matching Sector, Plot No, Street No and Plot Size are grouped together with the same color")
-        styled_grouped_df = create_grouped_view(grouped_df)
-        
-        # Display the styled DataFrame
-        st.dataframe(
-            styled_grouped_df,
-            use_container_width=True,
-            hide_index=True
-        )
+        if styled_duplicates_df.data.empty:
+            st.info("No duplicate listings found")
+        else:
+            st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
+            # Display the styled DataFrame
+            st.dataframe(
+                styled_duplicates_df,
+                use_container_width=True,
+                hide_index=True
+            )
     else:
-        st.info("No listings to group")
+        st.info("No listings to analyze for duplicates")
 
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
