@@ -209,7 +209,7 @@ def delete_rows_from_sheet(row_numbers):
 # Function to create grouped view with colors for duplicate entries
 def create_duplicates_view(df):
     if df.empty:
-        return df
+        return df, pd.DataFrame()
     
     # Create a key for grouping
     df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
@@ -222,7 +222,7 @@ def create_duplicates_view(df):
     duplicate_df = df[df["GroupKey"].isin(duplicate_groups)]
     
     if duplicate_df.empty:
-        return duplicate_df
+        return duplicate_df, duplicate_df
     
     # Sort by group key to cluster matching rows together
     duplicate_df = duplicate_df.sort_values(by="GroupKey")
@@ -241,7 +241,7 @@ def create_duplicates_view(df):
     
     # Create styled DataFrame
     styled_df = duplicate_df.style.apply(apply_row_color, axis=1)
-    return styled_df
+    return styled_df, duplicate_df
 
 # --- Streamlit App ---
 def main():
@@ -317,7 +317,7 @@ def main():
 
     st.subheader("📋 Filtered Listings")
     
-    # Row selection and deletion feature
+    # Row selection and deletion feature for main table
     if not df_filtered.empty:
         # Create a copy for display with selection column
         display_df = df_filtered.copy().reset_index(drop=True)
@@ -345,7 +345,7 @@ def main():
             st.markdown(f"**{len(selected_rows)} row(s) selected**")
             
             # Show delete confirmation
-            if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_button"):
+            if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_button_main"):
                 row_nums = selected_rows["SheetRowNum"].tolist()
                 success = delete_rows_from_sheet(row_nums)
                 
@@ -363,18 +363,48 @@ def main():
     # Create and display grouped view with colors for duplicates
     if not df_filtered.empty:
         # Generate styled DataFrame with duplicate groups
-        styled_duplicates_df = create_duplicates_view(df_filtered)
+        styled_duplicates_df, duplicates_df = create_duplicates_view(df_filtered)
         
-        if styled_duplicates_df.data.empty:
+        if duplicates_df.empty:
             st.info("No duplicate listings found")
         else:
             st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
-            # Display the styled DataFrame
-            st.dataframe(
-                styled_duplicates_df,
+            
+            # Create a copy for display with selection column
+            duplicate_display = duplicates_df.copy().reset_index(drop=True)
+            duplicate_display.insert(0, "Select", False)
+            
+            # Configure columns for data editor
+            column_config = {
+                "Select": st.column_config.CheckboxColumn(required=True),
+                "SheetRowNum": st.column_config.NumberColumn(disabled=True)
+            }
+            
+            # Display editable dataframe with checkboxes
+            edited_duplicates = st.data_editor(
+                duplicate_display,
+                column_config=column_config,
+                hide_index=True,
                 use_container_width=True,
-                hide_index=True
+                disabled=duplicate_display.columns.difference(["Select"]).tolist()
             )
+            
+            # Get selected rows
+            selected_duplicates = edited_duplicates[edited_duplicates["Select"]]
+            
+            if not selected_duplicates.empty:
+                st.markdown(f"**{len(selected_duplicates)} duplicate row(s) selected**")
+                
+                # Show delete confirmation
+                if st.button("🗑️ Delete Selected Duplicate Rows", type="primary", key="delete_button_duplicates"):
+                    row_nums = selected_duplicates["SheetRowNum"].tolist()
+                    success = delete_rows_from_sheet(row_nums)
+                    
+                    if success:
+                        st.success(f"✅ Successfully deleted {len(selected_duplicates)} duplicate row(s)!")
+                        # Clear cache and refresh
+                        st.cache_data.clear()
+                        st.rerun()
     else:
         st.info("No listings to analyze for duplicates")
 
