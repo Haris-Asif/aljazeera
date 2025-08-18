@@ -209,7 +209,7 @@ def delete_rows_from_sheet(row_numbers):
 # Function to create grouped view with colors for duplicate entries
 def create_duplicates_view(df):
     if df.empty:
-        return df, pd.DataFrame()
+        return None, pd.DataFrame()
     
     # Create a key for grouping
     df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
@@ -222,7 +222,7 @@ def create_duplicates_view(df):
     duplicate_df = df[df["GroupKey"].isin(duplicate_groups)]
     
     if duplicate_df.empty:
-        return duplicate_df, duplicate_df
+        return None, duplicate_df
     
     # Sort by group key to cluster matching rows together
     duplicate_df = duplicate_df.sort_values(by="GroupKey")
@@ -370,7 +370,14 @@ def main():
         else:
             st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
             
-            # Create a copy for display with selection column
+            # Display the styled DataFrame (color-coded)
+            st.dataframe(
+                styled_duplicates_df,
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Create a copy for deletion with selection column
             duplicate_display = duplicates_df.copy().reset_index(drop=True)
             duplicate_display.insert(0, "Select", False)
             
