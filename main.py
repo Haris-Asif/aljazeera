@@ -109,7 +109,7 @@ def sector_matches(f, c):
     if not f:
         return True
     f = f.replace(" ", "").upper()
-    c = str(c).replace(" ", "").upper()
+    c = str(c).replace(" ", "").upper())
     return f in c if "/" not in f else f == c
 
 def safe_dataframe(df):
@@ -194,22 +194,42 @@ def generate_whatsapp_messages(df):
         messages.append(current.strip())
     return messages
 
-# Delete rows from Google Sheet
+# Delete rows from Google Sheet - FIXED VERSION
 def delete_rows_from_sheet(row_numbers):
-    """Delete specified rows from Google Sheet"""
+    """Delete specified rows from Google Sheet with batch processing"""
     try:
         client = get_gsheet_client()
         sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
         
-        # Delete rows in descending order to avoid index shifting
-        for row_num in sorted(row_numbers, reverse=True):
-            # Ensure we're not deleting the header row
-            if row_num > 1:
-                sheet.delete_rows(row_num)
+        # Filter out header row and invalid row numbers
+        valid_rows = [row_num for row_num in row_numbers if row_num > 1]
+        if not valid_rows:
+            return True
+            
+        # Sort in descending order for batch deletion
+        valid_rows.sort(reverse=True)
+        
+        # Batch delete rows to avoid API limits
+        BATCH_SIZE = 10  # Delete in batches to avoid timeouts
+        for i in range(0, len(valid_rows), BATCH_SIZE):
+            batch = valid_rows[i:i+BATCH_SIZE]
+            
+            # Delete rows in batch (reverse order to maintain correct indices)
+            for row_num in batch:
+                try:
+                    sheet.delete_rows(row_num)
+                except Exception as e:
+                    st.error(f"Error deleting row {row_num}: {str(e)}")
+                    # Continue with next rows instead of failing completely
+                    continue
+                    
+            # Add a small delay between batches to avoid rate limiting
+            import time
+            time.sleep(1)
             
         return True
     except Exception as e:
-        st.error(f"Error deleting rows: {str(e)}")
+        st.error(f"Error in delete operation: {str(e)}")
         return False
 
 # Function to create grouped view with colors for duplicate entries
@@ -352,16 +372,25 @@ def main():
         if not selected_rows.empty:
             st.markdown(f"**{len(selected_rows)} row(s) selected**")
             
-            # Show delete confirmation
+            # Show delete confirmation with progress bar
             if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_button_main"):
                 row_nums = selected_rows["SheetRowNum"].tolist()
+                
+                # Show progress
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                # Delete with progress updates
                 success = delete_rows_from_sheet(row_nums)
                 
                 if success:
-                    st.success(f"✅ Successfully deleted {len(selected_rows)} row(s)!")
+                    progress_bar.progress(100)
+                    status_text.success(f"✅ Successfully deleted {len(selected_rows)} row(s)!")
                     # Clear cache and refresh
                     st.cache_data.clear()
                     st.rerun()
+                else:
+                    status_text.error("❌ Failed to delete some rows. Please try again.")
     else:
         st.info("No listings match your filters")
     
@@ -410,16 +439,25 @@ def main():
             if not selected_duplicates.empty:
                 st.markdown(f"**{len(selected_duplicates)} duplicate row(s) selected**")
                 
-                # Show delete confirmation
+                # Show delete confirmation with progress bar
                 if st.button("🗑️ Delete Selected Duplicate Rows", type="primary", key="delete_button_duplicates"):
                     row_nums = selected_duplicates["SheetRowNum"].tolist()
+                    
+                    # Show progress
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    # Delete with progress updates
                     success = delete_rows_from_sheet(row_nums)
                     
                     if success:
-                        st.success(f"✅ Successfully deleted {len(selected_duplicates)} duplicate row(s)!")
+                        progress_bar.progress(100)
+                        status_text.success(f"✅ Successfully deleted {len(selected_duplicates)} duplicate row(s)!")
                         # Clear cache and refresh
                         st.cache_data.clear()
                         st.rerun()
+                    else:
+                        status_text.error("❌ Failed to delete some rows. Please try again.")
     else:
         st.info("No listings to analyze for duplicates")
 
