@@ -76,6 +76,8 @@ def filter_by_date(df, label):
     df["ParsedDate"] = df["Timestamp"].apply(try_parse)
     return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
 
+# MODIFIED: Added caching with a short TTL to ensure fresh data
+@st.cache_data(ttl=30)  # Cache for 30 seconds
 def build_name_map(df):
     contact_to_name = {}
     for _, row in df.iterrows():
@@ -291,6 +293,7 @@ def main():
         selected_features = st.multiselect("Select Feature(s)", options=all_features)
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
+        # MODIFIED: Build name map every time with current data
         dealer_names, contact_to_name = build_name_map(df)
         selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names)
 
