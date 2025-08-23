@@ -238,7 +238,7 @@ def create_duplicates_view(df):
         return None, pd.DataFrame()
     
     # Create a key for grouping
-    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].ast(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
+    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
     
     # Count duplicates per group
     group_counts = df["GroupKey"].value_counts()
@@ -291,7 +291,6 @@ def main():
         selected_features = st.multiselect("Select Feature(s)", options=all_features)
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
-        # Build name map every time with current data (no caching)
         dealer_names, contact_to_name = build_name_map(df)
         selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names)
 
