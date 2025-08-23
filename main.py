@@ -97,7 +97,13 @@ def build_name_map(df):
         for c in numbers:
             if c in merged:
                 name_set[merged[c]] = True
-    return sorted(name_set.keys()), merged
+    
+    # Create a list of dealer names with serial numbers
+    numbered_dealers = []
+    for i, name in enumerate(sorted(name_set.keys()), 1):
+        numbered_dealers.append(f"{i}. {name}")
+    
+    return numbered_dealers, merged
 
 def sector_matches(f, c):
     if not f:
@@ -274,7 +280,9 @@ def main():
     df_filtered = df.copy()
 
     if selected_dealer:
-        selected_contacts = [c for c, name in contact_to_name.items() if name == selected_dealer]
+        # Extract the actual name from the numbered option
+        actual_name = selected_dealer.split(". ", 1)[1] if ". " in selected_dealer else selected_dealer
+        selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
         df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
             lambda x: any(c in clean_number(x) for c in selected_contacts))]
 
