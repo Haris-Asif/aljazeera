@@ -124,7 +124,7 @@ def safe_dataframe(df):
         st.error(f"⚠️ Error displaying table: {e}")
         return pd.DataFrame()
 
-# WhatsApp message generation - RESTORED INTENTIONAL FILTERS
+# WhatsApp message generation - FIXED to handle large messages properly
 def generate_whatsapp_messages(df):
     filtered = []
     for _, row in df.iterrows():
@@ -134,14 +134,11 @@ def generate_whatsapp_messages(df):
         price = str(row.get("Demand", "")).strip()
         street = str(row.get("Street No", "")).strip()
 
-        # INTENTIONAL FILTERS - RESTORED
-        # 1. Essential fields must be present
+        # INTENTIONAL FILTERS
         if not (sector and plot_no and size and price):
             continue
-        # 2. I-15 sector requires street number
         if "I-15/" in sector and not street:
             continue
-        # 3. Exclude "series" plots
         if "series" in plot_no.lower():
             continue
 
@@ -187,15 +184,25 @@ def generate_whatsapp_messages(df):
                 lines.append(f"St: {r['Street No']} | P: {r['Plot No']} | S: {r['Plot Size']} | D: {r['Demand']}")
             else:
                 lines.append(f"P: {r['Plot No']} | S: {r['Plot Size']} | D: {r['Demand']}")
+        
         block = f"*Available Options in {sector} Size: {size}*\n" + "\n".join(lines) + "\n\n"
-        if len(current + block) > 3900:
-            messages.append(current.strip())
-            current = block
+        
+        # Check if adding this block would exceed the limit
+        if len(current) + len(block) > 3900:
+            # If current is not empty, add it to messages
+            if current:
+                messages.append(current.strip())
+                current = block
+            else:
+                # If current is empty but block is too big, split the block
+                messages.append(block[:3900].strip())
+                current = block[3900:]
         else:
             current += block
 
     if current:
         messages.append(current.strip())
+    
     return messages
 
 # Delete rows from Google Sheet
@@ -242,7 +249,7 @@ def create_duplicates_view(df):
         return None, pd.DataFrame()
     
     # Create a key for grouping
-    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
+    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].ast(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
     
     # Count duplicates per group
     group_counts = df["GroupKey"].value_counts()
@@ -349,7 +356,7 @@ def main():
 
     st.subheader("📋 Filtered Listings")
     
-    # Show count of listings that will be included in WhatsApp message
+    # Count WhatsApp eligible listings
     whatsapp_eligible_count = 0
     for _, row in df_filtered.iterrows():
         sector = str(row.get("Sector", "")).strip()
@@ -533,10 +540,17 @@ def main():
         if not messages:
             st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots.")
         else:
+            st.success(f"📨 Generated {len(messages)} WhatsApp message(s)")
+            
+            # Show message previews
             for i, msg in enumerate(messages):
+                st.markdown(f"**Message {i+1}** ({len(msg)} characters):")
+                st.text_area(f"Preview Message {i+1}", msg, height=150, key=f"msg_preview_{i}")
+                
                 encoded = msg.replace(" ", "%20").replace("\n", "%0A")
                 link = f"https://wa.me/{wa_number}?text={encoded}"
                 st.markdown(f"[📩 Send Message {i+1}]({link})", unsafe_allow_html=True)
+                st.markdown("---")
 
 if __name__ == "__main__":
     main()
