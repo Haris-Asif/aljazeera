@@ -124,7 +124,7 @@ def safe_dataframe(df):
         st.error(f"⚠️ Error displaying table: {e}")
         return pd.DataFrame()
 
-# WhatsApp message generation
+# WhatsApp message generation - RESTORED INTENTIONAL FILTERS
 def generate_whatsapp_messages(df):
     filtered = []
     for _, row in df.iterrows():
@@ -134,10 +134,14 @@ def generate_whatsapp_messages(df):
         price = str(row.get("Demand", "")).strip()
         street = str(row.get("Street No", "")).strip()
 
+        # INTENTIONAL FILTERS - RESTORED
+        # 1. Essential fields must be present
         if not (sector and plot_no and size and price):
             continue
+        # 2. I-15 sector requires street number
         if "I-15/" in sector and not street:
             continue
+        # 3. Exclude "series" plots
         if "series" in plot_no.lower():
             continue
 
@@ -194,7 +198,7 @@ def generate_whatsapp_messages(df):
         messages.append(current.strip())
     return messages
 
-# Delete rows from Google Sheet - FIXED VERSION
+# Delete rows from Google Sheet
 def delete_rows_from_sheet(row_numbers):
     """Delete specified rows from Google Sheet with batch processing"""
     try:
@@ -345,11 +349,35 @@ def main():
 
     st.subheader("📋 Filtered Listings")
     
+    # Show count of listings that will be included in WhatsApp message
+    whatsapp_eligible_count = 0
+    for _, row in df_filtered.iterrows():
+        sector = str(row.get("Sector", "")).strip()
+        plot_no = str(row.get("Plot No", "")).strip()
+        size = str(row.get("Plot Size", "")).strip()
+        price = str(row.get("Demand", "")).strip()
+        street = str(row.get("Street No", "")).strip()
+        
+        if not (sector and plot_no and size and price):
+            continue
+        if "I-15/" in sector and not street:
+            continue
+        if "series" in plot_no.lower():
+            continue
+        whatsapp_eligible_count += 1
+    
+    st.info(f"📊 Total filtered listings: {len(df_filtered)} | ✅ WhatsApp eligible: {whatsapp_eligible_count}")
+    
     # Row selection and deletion feature for main table
     if not df_filtered.empty:
         # Create a copy for display with selection column
         display_df = df_filtered.copy().reset_index(drop=True)
         display_df.insert(0, "Select", False)
+        
+        # Add "Select All" checkbox
+        select_all = st.checkbox("Select All Rows", key="select_all_main")
+        if select_all:
+            display_df["Select"] = True
         
         # Configure columns for data editor
         column_config = {
@@ -417,6 +445,11 @@ def main():
             # Create a copy for deletion with selection column
             duplicate_display = duplicates_df.copy().reset_index(drop=True)
             duplicate_display.insert(0, "Select", False)
+            
+            # Add "Select All" checkbox for duplicates
+            select_all_duplicates = st.checkbox("Select All Duplicate Rows", key="select_all_duplicates")
+            if select_all_duplicates:
+                duplicate_display["Select"] = True
             
             # Configure columns for data editor
             column_config = {
@@ -495,9 +528,10 @@ def main():
             st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
             return
 
+        # Use the same filtered dataframe as the main table with intentional filters
         messages = generate_whatsapp_messages(df_filtered)
         if not messages:
-            st.warning("⚠️ No valid listings to include.")
+            st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots.")
         else:
             for i, msg in enumerate(messages):
                 encoded = msg.replace(" ", "%20").replace("\n", "%0A")
