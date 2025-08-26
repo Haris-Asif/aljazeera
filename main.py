@@ -124,8 +124,78 @@ def safe_dataframe(df):
         st.error(f"⚠️ Error displaying table: {e}")
         return pd.DataFrame()
 
-# WhatsApp message generation
+# ---------- WhatsApp utilities (split + encode aware) ----------
+def _extract_int(val):
+    """Extract first integer from a string; used for numeric sorting of Plot No."""
+    try:
+        m = re.search(r"\d+", str(val))
+        return int(m.group()) if m else float("inf")
+    except:
+        return float("inf")
+
+def _url_encode_for_whatsapp(text: str) -> str:
+    """Encode minimally for wa.me URL (matching your existing approach)."""
+    # Keep same encoding style you used, so links behave consistently
+    return text.replace(" ", "%20").replace("\n", "%0A")
+
+def _split_blocks_for_limits(blocks, plain_limit=3000, encoded_limit=1800):
+    """
+    Given a list of text blocks, accumulate them into chunks that
+    satisfy both plain text and encoded URL length limits.
+    """
+    chunks = []
+    current = ""
+
+    for block in blocks:
+        candidate = current + block
+        # Check both plain and encoded limits
+        if len(candidate) > plain_limit or len(_url_encode_for_whatsapp(candidate)) > encoded_limit:
+            if current:
+                chunks.append(current.rstrip())
+                current = ""
+
+            # If single block is still too large, split by lines
+            if len(block) > plain_limit or len(_url_encode_for_whatsapp(block)) > encoded_limit:
+                lines = block.splitlines(keepends=True)
+                small = ""
+                for ln in lines:
+                    cand2 = small + ln
+                    if len(cand2) > plain_limit or len(_url_encode_for_whatsapp(cand2)) > encoded_limit:
+                        if small:
+                            chunks.append(small.rstrip())
+                            small = ""
+                        # handle very long single line (rare): hard split
+                        if len(ln) > plain_limit or len(_url_encode_for_whatsapp(ln)) > encoded_limit:
+                            # split the line at safe slice points
+                            seg = ln
+                            while seg:
+                                # pick a safe slice size
+                                step = min(1000, len(seg))
+                                piece = seg[:step]
+                                while len(_url_encode_for_whatsapp(piece)) > encoded_limit and step > 10:
+                                    step -= 10
+                                    piece = seg[:step]
+                                chunks.append(piece.rstrip())
+                                seg = seg[step:]
+                        else:
+                            small = ln
+                    else:
+                        small = cand2
+                if small:
+                    chunks.append(small.rstrip())
+            else:
+                current = block
+        else:
+            current = candidate
+
+    if current:
+        chunks.append(current.rstrip())
+
+    return chunks
+
+# WhatsApp message generation (sorted by Plot No asc, URL-safe chunking)
 def generate_whatsapp_messages(df):
+    # Build list of eligible rows (keep your intentional filters)
     filtered = []
     for _, row in df.iterrows():
         sector = str(row.get("Sector", "")).strip()
@@ -134,7 +204,6 @@ def generate_whatsapp_messages(df):
         price = str(row.get("Demand", "")).strip()
         street = str(row.get("Street No", "")).strip()
 
-        # INTENTIONAL FILTERS
         if not (sector and plot_no and size and price):
             continue
         if "I-15/" in sector and not street:
@@ -150,6 +219,7 @@ def generate_whatsapp_messages(df):
             "Street No": street
         })
 
+    # De-duplicate on (Sector, Plot No, Plot Size, Demand)
     seen = set()
     unique = []
     for row in filtered:
@@ -158,48 +228,37 @@ def generate_whatsapp_messages(df):
             seen.add(key)
             unique.append(row)
 
+    # Group by (Sector, Plot Size) as before
     grouped = {}
     for row in unique:
         key = (row["Sector"], row["Plot Size"])
         grouped.setdefault(key, []).append(row)
 
-    def get_sort_key(val):
-        try:
-            return int(re.search(r"\d+", val).group())
-        except:
-            return float("inf")
-
-    messages = []
-    current = ""
-
+    # Build per-group message blocks with sorting by Plot No ascending
+    blocks = []
     for (sector, size), listings in grouped.items():
-        if sector.startswith("I-15/"):
-            listings = sorted(listings, key=lambda x: (get_sort_key(x["Street No"]), get_sort_key(x["Plot No"])))
-        else:
-            listings = sorted(listings, key=lambda x: get_sort_key(x["Plot No"]))
+        # Sort primarily by Plot No ascending (numeric-first)
+        listings = sorted(
+            listings,
+            key=lambda x: (_extract_int(x["Plot No"]), str(x["Plot No"]))
+        )
 
         lines = []
         for r in listings:
             if sector.startswith("I-15/"):
+                # Keep your I-15 line format but ordering still by Plot No due to sort above
                 lines.append(f"St: {r['Street No']} | P: {r['Plot No']} | S: {r['Plot Size']} | D: {r['Demand']}")
             else:
                 lines.append(f"P: {r['Plot No']} | S: {r['Plot Size']} | D: {r['Demand']}")
-        
-        block = f"*Available Options in {sector} Size: {size}*\n" + "\n".join(lines) + "\n\n"
-        
-        if len(current) + len(block) > 3900:
-            if current:
-                messages.append(current.strip())
-                current = block
-            else:
-                messages.append(block[:3900].strip())
-                current = block[3900:]
-        else:
-            current += block
 
-    if current:
-        messages.append(current.strip())
-    
+        header = f"*Available Options in {sector} Size: {size}*\n"
+        block = header + "\n".join(lines) + "\n\n"
+        blocks.append(block)
+
+    # Split into URL-safe chunks
+    # Conservative caps: plain <= 3000 chars, encoded <= 1800 chars
+    messages = _split_blocks_for_limits(blocks, plain_limit=3000, encoded_limit=1800)
+
     return messages
 
 # Delete rows from Google Sheet
@@ -237,7 +296,7 @@ def create_duplicates_view(df):
     if df.empty:
         return None, pd.DataFrame()
     
-    # ✅ FIX: Corrected .ast(str) to .astype(str)
+    # Correct usage of astype
     df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
     
     group_counts = df["GroupKey"].value_counts()
@@ -285,6 +344,12 @@ def main():
         selected_features = st.multiselect("Select Feature(s)", options=all_features)
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
+        # NEW: Property Type filter populated from sheet
+        prop_type_options = ["All"]
+        if "Property Type" in df.columns:
+            prop_type_options += sorted([str(v).strip() for v in df["Property Type"].dropna().astype(str).unique()])
+        selected_prop_type = st.selectbox("Property Type", prop_type_options)
+
         dealer_names, contact_to_name = build_name_map(df)
         selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names)
 
@@ -322,6 +387,10 @@ def main():
         df_filtered = df_filtered[df_filtered["Extracted Contact"].astype(str).apply(
             lambda x: any(cnum == clean_number(p) for p in x.split(",")))]
 
+    # NEW: Apply Property Type filter if selected
+    if "Property Type" in df_filtered.columns and selected_prop_type and selected_prop_type != "All":
+        df_filtered = df_filtered[df_filtered["Property Type"].astype(str).str.strip() == selected_prop_type]
+
     df_filtered["ParsedPrice"] = df_filtered["Demand"].apply(parse_price)
     df_filtered = df_filtered[df_filtered["ParsedPrice"].notnull()]
     df_filtered = df_filtered[(df_filtered["ParsedPrice"] >= price_from) & (df_filtered["ParsedPrice"] <= price_to)]
@@ -331,12 +400,14 @@ def main():
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
+    # Move Timestamp column to the end
     if "Timestamp" in df_filtered.columns:
         cols = [col for col in df_filtered.columns if col != "Timestamp"] + ["Timestamp"]
         df_filtered = df_filtered[cols]
 
     st.subheader("📋 Filtered Listings")
     
+    # Count WhatsApp eligible listings (same rules you had)
     whatsapp_eligible_count = 0
     for _, row in df_filtered.iterrows():
         sector = str(row.get("Sector", "")).strip()
@@ -355,19 +426,23 @@ def main():
     
     st.info(f"📊 Total filtered listings: {len(df_filtered)} | ✅ WhatsApp eligible: {whatsapp_eligible_count}")
     
+    # Row selection and deletion feature for main table
     if not df_filtered.empty:
         display_df = df_filtered.copy().reset_index(drop=True)
         display_df.insert(0, "Select", False)
         
+        # Add "Select All" checkbox
         select_all = st.checkbox("Select All Rows", key="select_all_main")
         if select_all:
             display_df["Select"] = True
         
+        # Configure columns for data editor
         column_config = {
             "Select": st.column_config.CheckboxColumn(required=True),
             "SheetRowNum": st.column_config.NumberColumn(disabled=True)
         }
         
+        # Display editable dataframe with checkboxes
         edited_df = st.data_editor(
             display_df,
             column_config=column_config,
@@ -376,22 +451,27 @@ def main():
             disabled=display_df.columns.difference(["Select"]).tolist()
         )
         
+        # Get selected rows
         selected_rows = edited_df[edited_df["Select"]]
         
         if not selected_rows.empty:
             st.markdown(f"**{len(selected_rows)} row(s) selected**")
             
+            # Show delete confirmation with progress bar
             if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_button_main"):
                 row_nums = selected_rows["SheetRowNum"].tolist()
                 
+                # Show progress
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
+                # Delete with progress updates
                 success = delete_rows_from_sheet(row_nums)
                 
                 if success:
                     progress_bar.progress(100)
                     status_text.success(f"✅ Successfully deleted {len(selected_rows)} row(s)!")
+                    # Clear cache and refresh
                     st.cache_data.clear()
                     st.rerun()
                 else:
@@ -402,7 +482,9 @@ def main():
     st.markdown("---")
     st.subheader("👥 Duplicate Listings (Matching Sector, Plot No, Street No, Plot Size)")
     
+    # Create and display grouped view with colors for duplicates
     if not df_filtered.empty:
+        # Generate styled DataFrame with duplicate groups
         styled_duplicates_df, duplicates_df = create_duplicates_view(df_filtered)
         
         if duplicates_df.empty:
@@ -410,24 +492,29 @@ def main():
         else:
             st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
             
+            # Display the styled DataFrame (color-coded)
             st.dataframe(
                 styled_duplicates_df,
                 use_container_width=True,
                 hide_index=True
             )
             
+            # Create a copy for deletion with selection column
             duplicate_display = duplicates_df.copy().reset_index(drop=True)
             duplicate_display.insert(0, "Select", False)
             
+            # Add "Select All" checkbox for duplicates
             select_all_duplicates = st.checkbox("Select All Duplicate Rows", key="select_all_duplicates")
             if select_all_duplicates:
                 duplicate_display["Select"] = True
             
+            # Configure columns for data editor
             column_config = {
                 "Select": st.column_config.CheckboxColumn(required=True),
                 "SheetRowNum": st.column_config.NumberColumn(disabled=True)
             }
             
+            # Display editable dataframe with checkboxes
             edited_duplicates = st.data_editor(
                 duplicate_display,
                 column_config=column_config,
@@ -436,22 +523,27 @@ def main():
                 disabled=duplicate_display.columns.difference(["Select"]).tolist()
             )
             
+            # Get selected rows
             selected_duplicates = edited_duplicates[edited_duplicates["Select"]]
             
             if not selected_duplicates.empty:
                 st.markdown(f"**{len(selected_duplicates)} duplicate row(s) selected**")
                 
+                # Show delete confirmation with progress bar
                 if st.button("🗑️ Delete Selected Duplicate Rows", type="primary", key="delete_button_duplicates"):
                     row_nums = selected_duplicates["SheetRowNum"].tolist()
                     
+                    # Show progress
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     
+                    # Delete with progress updates
                     success = delete_rows_from_sheet(row_nums)
                     
                     if success:
                         progress_bar.progress(100)
                         status_text.success(f"✅ Successfully deleted {len(selected_duplicates)} duplicate row(s)!")
+                        # Clear cache and refresh
                         st.cache_data.clear()
                         st.rerun()
                     else:
@@ -493,12 +585,14 @@ def main():
             st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
             return
 
+        # Use the same filtered dataframe as the main table with intentional filters
         messages = generate_whatsapp_messages(df_filtered)
         if not messages:
             st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots.")
         else:
             st.success(f"📨 Generated {len(messages)} WhatsApp message(s)")
             
+            # Show message previews and safe links
             for i, msg in enumerate(messages):
                 st.markdown(f"**Message {i+1}** ({len(msg)} characters):")
                 st.text_area(f"Preview Message {i+1}", msg, height=150, key=f"msg_preview_{i}")
