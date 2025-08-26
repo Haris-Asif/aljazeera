@@ -124,7 +124,7 @@ def safe_dataframe(df):
         st.error(f"⚠️ Error displaying table: {e}")
         return pd.DataFrame()
 
-# WhatsApp message generation - FIXED to handle large messages properly
+# WhatsApp message generation
 def generate_whatsapp_messages(df):
     filtered = []
     for _, row in df.iterrows():
@@ -187,14 +187,11 @@ def generate_whatsapp_messages(df):
         
         block = f"*Available Options in {sector} Size: {size}*\n" + "\n".join(lines) + "\n\n"
         
-        # Check if adding this block would exceed the limit
         if len(current) + len(block) > 3900:
-            # If current is not empty, add it to messages
             if current:
                 messages.append(current.strip())
                 current = block
             else:
-                # If current is empty but block is too big, split the block
                 messages.append(block[:3900].strip())
                 current = block[3900:]
         else:
@@ -207,34 +204,26 @@ def generate_whatsapp_messages(df):
 
 # Delete rows from Google Sheet
 def delete_rows_from_sheet(row_numbers):
-    """Delete specified rows from Google Sheet with batch processing"""
     try:
         client = get_gsheet_client()
         sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
         
-        # Filter out header row and invalid row numbers
         valid_rows = [row_num for row_num in row_numbers if row_num > 1]
         if not valid_rows:
             return True
             
-        # Sort in descending order for batch deletion
         valid_rows.sort(reverse=True)
         
-        # Batch delete rows to avoid API limits
-        BATCH_SIZE = 10  # Delete in batches to avoid timeouts
+        BATCH_SIZE = 10
         for i in range(0, len(valid_rows), BATCH_SIZE):
             batch = valid_rows[i:i+BATCH_SIZE]
-            
-            # Delete rows in batch (reverse order to maintain correct indices)
             for row_num in batch:
                 try:
                     sheet.delete_rows(row_num)
                 except Exception as e:
                     st.error(f"Error deleting row {row_num}: {str(e)}")
-                    # Continue with next rows instead of failing completely
                     continue
                     
-            # Add a small delay between batches to avoid rate limiting
             import time
             time.sleep(1)
             
@@ -248,23 +237,19 @@ def create_duplicates_view(df):
     if df.empty:
         return None, pd.DataFrame()
     
-    # Create a key for grouping
+    # ✅ FIX: Corrected .ast(str) to .astype(str)
     df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
     
-    # Count duplicates per group
     group_counts = df["GroupKey"].value_counts()
     
-    # Filter only groups with duplicates (2 or more entries)
     duplicate_groups = group_counts[group_counts >= 2].index
     duplicate_df = df[df["GroupKey"].isin(duplicate_groups)]
     
     if duplicate_df.empty:
         return None, duplicate_df
     
-    # Sort by group key to cluster matching rows together
     duplicate_df = duplicate_df.sort_values(by="GroupKey")
     
-    # Map each group to a unique color
     unique_groups = duplicate_df["GroupKey"].unique()
     color_map = {}
     colors = ["#FFCCCC", "#CCFFCC", "#CCCCFF", "#FFFFCC", "#FFCCFF", "#CCFFFF", "#FFE5CC", "#E5CCFF"]
@@ -272,11 +257,9 @@ def create_duplicates_view(df):
     for i, group in enumerate(unique_groups):
         color_map[group] = colors[i % len(colors)]
     
-    # Apply colors to DataFrame
     def apply_row_color(row):
         return [f"background-color: {color_map[row['GroupKey']]}"] * len(row)
     
-    # Create styled DataFrame
     styled_df = duplicate_df.style.apply(apply_row_color, axis=1)
     return styled_df, duplicate_df
 
@@ -311,7 +294,6 @@ def main():
     df_filtered = df.copy()
 
     if selected_dealer:
-        # Extract the actual name from the numbered option
         actual_name = selected_dealer.split(". ", 1)[1] if ". " in selected_dealer else selected_dealer
         selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
         df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
@@ -349,14 +331,12 @@ def main():
 
     df_filtered = filter_by_date(df_filtered, date_filter)
 
-    # Move Timestamp column to the end
     if "Timestamp" in df_filtered.columns:
         cols = [col for col in df_filtered.columns if col != "Timestamp"] + ["Timestamp"]
         df_filtered = df_filtered[cols]
 
     st.subheader("📋 Filtered Listings")
     
-    # Count WhatsApp eligible listings
     whatsapp_eligible_count = 0
     for _, row in df_filtered.iterrows():
         sector = str(row.get("Sector", "")).strip()
@@ -375,24 +355,19 @@ def main():
     
     st.info(f"📊 Total filtered listings: {len(df_filtered)} | ✅ WhatsApp eligible: {whatsapp_eligible_count}")
     
-    # Row selection and deletion feature for main table
     if not df_filtered.empty:
-        # Create a copy for display with selection column
         display_df = df_filtered.copy().reset_index(drop=True)
         display_df.insert(0, "Select", False)
         
-        # Add "Select All" checkbox
         select_all = st.checkbox("Select All Rows", key="select_all_main")
         if select_all:
             display_df["Select"] = True
         
-        # Configure columns for data editor
         column_config = {
             "Select": st.column_config.CheckboxColumn(required=True),
             "SheetRowNum": st.column_config.NumberColumn(disabled=True)
         }
         
-        # Display editable dataframe with checkboxes
         edited_df = st.data_editor(
             display_df,
             column_config=column_config,
@@ -401,27 +376,22 @@ def main():
             disabled=display_df.columns.difference(["Select"]).tolist()
         )
         
-        # Get selected rows
         selected_rows = edited_df[edited_df["Select"]]
         
         if not selected_rows.empty:
             st.markdown(f"**{len(selected_rows)} row(s) selected**")
             
-            # Show delete confirmation with progress bar
             if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_button_main"):
                 row_nums = selected_rows["SheetRowNum"].tolist()
                 
-                # Show progress
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                # Delete with progress updates
                 success = delete_rows_from_sheet(row_nums)
                 
                 if success:
                     progress_bar.progress(100)
                     status_text.success(f"✅ Successfully deleted {len(selected_rows)} row(s)!")
-                    # Clear cache and refresh
                     st.cache_data.clear()
                     st.rerun()
                 else:
@@ -432,9 +402,7 @@ def main():
     st.markdown("---")
     st.subheader("👥 Duplicate Listings (Matching Sector, Plot No, Street No, Plot Size)")
     
-    # Create and display grouped view with colors for duplicates
     if not df_filtered.empty:
-        # Generate styled DataFrame with duplicate groups
         styled_duplicates_df, duplicates_df = create_duplicates_view(df_filtered)
         
         if duplicates_df.empty:
@@ -442,29 +410,24 @@ def main():
         else:
             st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
             
-            # Display the styled DataFrame (color-coded)
             st.dataframe(
                 styled_duplicates_df,
                 use_container_width=True,
                 hide_index=True
             )
             
-            # Create a copy for deletion with selection column
             duplicate_display = duplicates_df.copy().reset_index(drop=True)
             duplicate_display.insert(0, "Select", False)
             
-            # Add "Select All" checkbox for duplicates
             select_all_duplicates = st.checkbox("Select All Duplicate Rows", key="select_all_duplicates")
             if select_all_duplicates:
                 duplicate_display["Select"] = True
             
-            # Configure columns for data editor
             column_config = {
                 "Select": st.column_config.CheckboxColumn(required=True),
                 "SheetRowNum": st.column_config.NumberColumn(disabled=True)
             }
             
-            # Display editable dataframe with checkboxes
             edited_duplicates = st.data_editor(
                 duplicate_display,
                 column_config=column_config,
@@ -473,27 +436,22 @@ def main():
                 disabled=duplicate_display.columns.difference(["Select"]).tolist()
             )
             
-            # Get selected rows
             selected_duplicates = edited_duplicates[edited_duplicates["Select"]]
             
             if not selected_duplicates.empty:
                 st.markdown(f"**{len(selected_duplicates)} duplicate row(s) selected**")
                 
-                # Show delete confirmation with progress bar
                 if st.button("🗑️ Delete Selected Duplicate Rows", type="primary", key="delete_button_duplicates"):
                     row_nums = selected_duplicates["SheetRowNum"].tolist()
                     
-                    # Show progress
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     
-                    # Delete with progress updates
                     success = delete_rows_from_sheet(row_nums)
                     
                     if success:
                         progress_bar.progress(100)
                         status_text.success(f"✅ Successfully deleted {len(selected_duplicates)} duplicate row(s)!")
-                        # Clear cache and refresh
                         st.cache_data.clear()
                         st.rerun()
                     else:
@@ -535,14 +493,12 @@ def main():
             st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
             return
 
-        # Use the same filtered dataframe as the main table with intentional filters
         messages = generate_whatsapp_messages(df_filtered)
         if not messages:
             st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots.")
         else:
             st.success(f"📨 Generated {len(messages)} WhatsApp message(s)")
             
-            # Show message previews
             for i, msg in enumerate(messages):
                 st.markdown(f"**Message {i+1}** ({len(msg)} characters):")
                 st.text_area(f"Preview Message {i+1}", msg, height=150, key=f"msg_preview_{i}")
