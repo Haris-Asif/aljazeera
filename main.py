@@ -249,7 +249,7 @@ def create_duplicates_view(df):
         return None, pd.DataFrame()
     
     # Create a key for grouping
-    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].ast(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
+    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
     
     # Count duplicates per group
     group_counts = df["GroupKey"].value_counts()
