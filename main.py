@@ -10,6 +10,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 SPREADSHEET_NAME = "Al-Jazeera"
 PLOTS_SHEET = "Plots"
 CONTACTS_SHEET = "Contacts"
+LEADS_SHEET = "Leads"  # New sheet for lead management
 
 # Streamlit setup
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
@@ -62,6 +63,63 @@ def load_plot_data():
 def load_contacts():
     sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
     return pd.DataFrame(sheet.get_all_records())
+
+# NEW: Load leads data
+def load_leads():
+    try:
+        sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(LEADS_SHEET)
+        df = pd.DataFrame(sheet.get_all_records())
+        if df.empty:
+            # Initialize with empty dataframe with proper columns
+            df = pd.DataFrame(columns=[
+                "Timestamp", "Name", "Phone", "Email", "Source", "Status", 
+                "Priority", "Property Interest", "Last Contact", "Next Action", 
+                "Notes", "Assigned To"
+            ])
+        return df
+    except gspread.exceptions.WorksheetNotFound:
+        # Create the worksheet if it doesn't exist
+        sheet = get_gsheet_client().open(SPREADSHEET_NAME)
+        worksheet = sheet.add_worksheet(title=LEADS_SHEET, rows=100, cols=12)
+        # Add headers
+        worksheet.append_row([
+            "Timestamp", "Name", "Phone", "Email", "Source", "Status", 
+            "Priority", "Property Interest", "Last Contact", "Next Action", 
+            "Notes", "Assigned To"
+        ])
+        return pd.DataFrame(columns=[
+            "Timestamp", "Name", "Phone", "Email", "Source", "Status", 
+            "Priority", "Property Interest", "Last Contact", "Next Action", 
+            "Notes", "Assigned To"
+        ])
+
+# NEW: Save leads data
+def save_leads(df):
+    sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(LEADS_SHEET)
+    # Clear existing data
+    sheet.clear()
+    # Add headers
+    sheet.append_row([
+        "Timestamp", "Name", "Phone", "Email", "Source", "Status", 
+        "Priority", "Property Interest", "Last Contact", "Next Action", 
+        "Notes", "Assigned To"
+    ])
+    # Add data
+    for _, row in df.iterrows():
+        sheet.append_row([
+            row.get("Timestamp", ""),
+            row.get("Name", ""),
+            row.get("Phone", ""),
+            row.get("Email", ""),
+            row.get("Source", ""),
+            row.get("Status", ""),
+            row.get("Priority", ""),
+            row.get("Property Interest", ""),
+            row.get("Last Contact", ""),
+            row.get("Next Action", ""),
+            row.get("Notes", ""),
+            row.get("Assigned To", "")
+        ])
 
 def filter_by_date(df, label):
     if label == "All":
@@ -322,10 +380,221 @@ def create_duplicates_view(df):
     styled_df = duplicate_df.style.apply(apply_row_color, axis=1)
     return styled_df, duplicate_df
 
-# --- Streamlit App ---
-def main():
-    st.title("🏡 Al-Jazeera Real Estate Tool")
+# --- NEW: Lead Management Functions ---
+def leads_page():
+    st.header("👥 Lead Management")
+    
+    # Load leads data
+    leads_df = load_leads()
+    
+    # Calculate metrics for dashboard
+    total_leads = len(leads_df)
+    
+    # Count leads by status
+    status_counts = leads_df["Status"].value_counts() if "Status" in leads_df.columns else pd.Series()
+    new_leads = status_counts.get("New", 0)
+    contacted_leads = status_counts.get("Contacted", 0)
+    negotiation_leads = status_counts.get("Negotiation", 0)
+    
+    # Count overdue actions
+    today = datetime.now().date()
+    if "Next Action" in leads_df.columns:
+        overdue_actions = sum(
+            1 for date_str in leads_df["Next Action"] 
+            if date_str and pd.notna(date_str) and 
+            datetime.strptime(str(date_str), "%Y-%m-%d").date() < today
+        )
+    else:
+        overdue_actions = 0
+    
+    # Display metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Leads", total_leads)
+    with col2:
+        st.metric("New Leads", new_leads)
+    with col3:
+        st.metric("In Negotiation", negotiation_leads)
+    with col4:
+        st.metric("Overdue Actions", overdue_actions, delta=f"{overdue_actions} need attention", 
+                 delta_color="inverse" if overdue_actions > 0 else "normal")
+    
+    # Display overdue actions as notifications
+    if overdue_actions > 0:
+        st.warning(f"⚠️ You have {overdue_actions} overdue follow-up actions. Check the 'Next Action' column.")
+    
+    # Tabs for different views
+    tab1, tab2, tab3 = st.tabs(["All Leads", "Add New Lead", "Reports"])
+    
+    with tab1:
+        st.subheader("All Leads")
+        
+        if leads_df.empty:
+            st.info("No leads found. Add your first lead in the 'Add New Lead' tab.")
+        else:
+            # Filters
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                status_filter = st.selectbox("Filter by Status", 
+                                           options=["All"] + list(leads_df["Status"].unique()) if "Status" in leads_df.columns else ["All"])
+            with col2:
+                priority_filter = st.selectbox("Filter by Priority", 
+                                             options=["All"] + list(leads_df["Priority"].unique()) if "Priority" in leads_df.columns else ["All"])
+            with col3:
+                source_filter = st.selectbox("Filter by Source", 
+                                           options=["All"] + list(leads_df["Source"].unique()) if "Source" in leads_df.columns else ["All"])
+            
+            # Apply filters
+            filtered_leads = leads_df.copy()
+            if status_filter != "All":
+                filtered_leads = filtered_leads[filtered_leads["Status"] == status_filter]
+            if priority_filter != "All":
+                filtered_leads = filtered_leads[filtered_leads["Priority"] == priority_filter]
+            if source_filter != "All":
+                filtered_leads = filtered_leads[filtered_leads["Source"] == source_filter]
+            
+            # Display leads table
+            st.dataframe(filtered_leads, use_container_width=True)
+            
+            # Lead actions
+            if not filtered_leads.empty:
+                st.subheader("Update Lead")
+                lead_names = filtered_leads["Name"].tolist()
+                selected_lead = st.selectbox("Select Lead to Update", options=lead_names)
+                
+                if selected_lead:
+                    lead_data = filtered_leads[filtered_leads["Name"] == selected_lead].iloc[0]
+                    
+                    with st.form("update_lead_form"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            new_status = st.selectbox("Status", 
+                                                    options=["New", "Contacted", "Follow-up", "Meeting Scheduled", 
+                                                            "Negotiation", "Offer Made", "Deal Closed (Won)", "Not Interested (Lost)"],
+                                                    index=0 if pd.isna(lead_data.get("Status")) else 
+                                                    ["New", "Contacted", "Follow-up", "Meeting Scheduled", 
+                                                     "Negotiation", "Offer Made", "Deal Closed (Won)", "Not Interested (Lost)"].index(lead_data.get("Status")))
+                            new_priority = st.selectbox("Priority", 
+                                                      options=["Low", "Medium", "High"],
+                                                      index=0 if pd.isna(lead_data.get("Priority")) else 
+                                                      ["Low", "Medium", "High"].index(lead_data.get("Priority")))
+                            new_next_action = st.date_input("Next Action", 
+                                                          value=datetime.strptime(lead_data.get("Next Action"), "%Y-%m-%d").date() 
+                                                          if lead_data.get("Next Action") and pd.notna(lead_data.get("Next Action")) else datetime.now().date())
+                        with col2:
+                            new_last_contact = st.date_input("Last Contact", 
+                                                           value=datetime.strptime(lead_data.get("Last Contact"), "%Y-%m-%d").date() 
+                                                           if lead_data.get("Last Contact") and pd.notna(lead_data.get("Last Contact")) else datetime.now().date())
+                            new_notes = st.text_area("Notes", value=lead_data.get("Notes", ""))
+                        
+                        if st.form_submit_button("Update Lead"):
+                            # Update the lead in the dataframe
+                            idx = leads_df[leads_df["Name"] == selected_lead].index[0]
+                            leads_df.at[idx, "Status"] = new_status
+                            leads_df.at[idx, "Priority"] = new_priority
+                            leads_df.at[idx, "Next Action"] = new_next_action.strftime("%Y-%m-%d")
+                            leads_df.at[idx, "Last Contact"] = new_last_contact.strftime("%Y-%m-%d")
+                            leads_df.at[idx, "Notes"] = new_notes
+                            
+                            # Save to Google Sheets
+                            save_leads(leads_df)
+                            st.success("Lead updated successfully!")
+                            st.rerun()
+    
+    with tab2:
+        st.subheader("Add New Lead")
+        
+        with st.form("add_lead_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                name = st.text_input("Name*", placeholder="Client Name")
+                phone = st.text_input("Phone*", placeholder="03XXXXXXXXX")
+                email = st.text_input("Email", placeholder="client@example.com")
+                source = st.selectbox("Source", 
+                                    options=["Website", "WhatsApp", "Referral", "Walk-in", "Other"])
+            with col2:
+                status = st.selectbox("Status", 
+                                    options=["New", "Contacted", "Follow-up", "Meeting Scheduled", 
+                                            "Negotiation", "Offer Made", "Deal Closed (Won)", "Not Interested (Lost)"])
+                priority = st.selectbox("Priority", 
+                                      options=["Low", "Medium", "High"])
+                property_interest = st.text_input("Property Interest", placeholder="e.g., I-10/4, 125 sq yd")
+                next_action = st.date_input("Next Action", value=datetime.now().date() + timedelta(days=7))
+            
+            notes = st.text_area("Notes", placeholder="Any additional information about the lead")
+            
+            if st.form_submit_button("Add Lead"):
+                if not name or not phone:
+                    st.error("Name and Phone are required fields!")
+                else:
+                    # Create new lead entry
+                    new_lead = {
+                        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Name": name,
+                        "Phone": phone,
+                        "Email": email,
+                        "Source": source,
+                        "Status": status,
+                        "Priority": priority,
+                        "Property Interest": property_interest,
+                        "Last Contact": datetime.now().strftime("%Y-%m-%d"),
+                        "Next Action": next_action.strftime("%Y-%m-%d"),
+                        "Notes": notes,
+                        "Assigned To": "Current User"  # You can modify this based on your user management
+                    }
+                    
+                    # Add to dataframe
+                    leads_df = pd.concat([leads_df, pd.DataFrame([new_lead])], ignore_index=True)
+                    
+                    # Save to Google Sheets
+                    save_leads(leads_df)
+                    st.success("Lead added successfully!")
+                    st.rerun()
+    
+    with tab3:
+        st.subheader("Lead Reports")
+        
+        if leads_df.empty:
+            st.info("No leads data available for reports.")
+        else:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Status distribution
+                st.write("**Leads by Status**")
+                if "Status" in leads_df.columns:
+                    status_counts = leads_df["Status"].value_counts()
+                    st.bar_chart(status_counts)
+                else:
+                    st.info("No status data available.")
+            
+            with col2:
+                # Source distribution
+                st.write("**Leads by Source**")
+                if "Source" in leads_df.columns:
+                    source_counts = leads_df["Source"].value_counts()
+                    st.bar_chart(source_counts)
+                else:
+                    st.info("No source data available.")
+            
+            # Upcoming actions
+            st.write("**Upcoming Actions (Next 7 Days)**")
+            upcoming_df = leads_df.copy()
+            if "Next Action" in upcoming_df.columns:
+                upcoming_df["Next Action"] = pd.to_datetime(upcoming_df["Next Action"], errors="coerce")
+                next_week = datetime.now().date() + timedelta(days=7)
+                upcoming_df = upcoming_df[
+                    (upcoming_df["Next Action"].dt.date >= datetime.now().date()) & 
+                    (upcoming_df["Next Action"].dt.date <= next_week)
+                ]
+                st.dataframe(upcoming_df[["Name", "Phone", "Next Action", "Status"]], use_container_width=True)
+            else:
+                st.info("No upcoming actions in the next 7 days.")
 
+# --- Plots Page ---
+def plots_page():
+    st.header("🏡 Property Listings")
+    
     # Load data
     df = load_plot_data().fillna("")
     contacts_df = load_contacts()
@@ -344,7 +613,7 @@ def main():
         selected_features = st.multiselect("Select Feature(s)", options=all_features)
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
 
-        # NEW: Property Type filter populated from sheet
+        # Property Type filter
         prop_type_options = ["All"]
         if "Property Type" in df.columns:
             prop_type_options += sorted([str(v).strip() for v in df["Property Type"].dropna().astype(str).unique()])
@@ -387,7 +656,7 @@ def main():
         df_filtered = df_filtered[df_filtered["Extracted Contact"].astype(str).apply(
             lambda x: any(cnum == clean_number(p) for p in x.split(",")))]
 
-    # NEW: Apply Property Type filter if selected
+    # Apply Property Type filter if selected
     if "Property Type" in df_filtered.columns and selected_prop_type and selected_prop_type != "All":
         df_filtered = df_filtered[df_filtered["Property Type"].astype(str).str.strip() == selected_prop_type]
 
@@ -407,7 +676,7 @@ def main():
 
     st.subheader("📋 Filtered Listings")
     
-    # Count WhatsApp eligible listings (same rules you had)
+    # Count WhatsApp eligible listings
     whatsapp_eligible_count = 0
     for _, row in df_filtered.iterrows():
         sector = str(row.get("Sector", "")).strip()
@@ -601,6 +870,18 @@ def main():
                 link = f"https://wa.me/{wa_number}?text={encoded}"
                 st.markdown(f"[📩 Send Message {i+1}]({link})", unsafe_allow_html=True)
                 st.markdown("---")
+
+# --- Main App ---
+def main():
+    st.title("🏡 Al-Jazeera Real Estate Tool")
+    
+    # Navigation
+    page = st.sidebar.selectbox("Navigate", ["Plots", "Leads"])
+    
+    if page == "Plots":
+        plots_page()
+    else:
+        leads_page()
 
 if __name__ == "__main__":
     main()
