@@ -639,7 +639,7 @@ def calculate_lead_score(lead_data, activities_df):
         if budget > 5000000:  # Above 50 lakhs
             score += 20
         elif budget > 2000000:  # Above 20 lakhs
-            score += 10
+        score += 10
     
     return min(score, 100)  # Cap at 100
 
@@ -814,7 +814,7 @@ def display_lead_analytics(leads_df, activities_df):
     else:
         st.info("No activities data available.")
 
-# --- NEW: Phone number formatting for dialer ---
+# --- Phone number formatting for dialer ---
 def format_phone_number(phone):
     """Format phone number for dialer link"""
     if not phone:
@@ -849,6 +849,23 @@ def display_phone_with_dialer(phone):
         return f'<a href="{dialer_link}" style="color: #1f77b4; text-decoration: none;">{phone}</a>'
     else:
         return phone
+
+def format_contact_column(contact_str):
+    """Format Extracted Contact column with dialer links for each number"""
+    if not contact_str:
+        return ""
+    
+    numbers = extract_numbers(contact_str)
+    formatted_numbers = []
+    
+    for num in numbers:
+        dialer_link = create_dialer_link(num)
+        if dialer_link:
+            formatted_numbers.append(f'<a href="{dialer_link}" style="color: #1f77b4; text-decoration: none;">{num}</a>')
+        else:
+            formatted_numbers.append(num)
+    
+    return ", ".join(formatted_numbers)
 
 def leads_page():
     st.header("👥 Lead Management CRM")
@@ -1008,15 +1025,15 @@ def leads_page():
             # Lead actions
             if not filtered_leads.empty:
                 st.subheader("Update Lead")
-                lead_options = [f"{row['Name']} ({row['Phone']})" for _, row in filtered_leads.iterrows()]
+                lead_options = [f"{row['Name']} ({row['Phone']}) - {row['ID']}" for _, row in filtered_leads.iterrows()]
                 selected_lead = st.selectbox("Select Lead to Update", options=lead_options, key="update_lead_select")
                 
                 if selected_lead:
-                    lead_name = selected_lead.split(" (")[0]
-                    lead_phone = selected_lead.split(" (")[1].replace(")", "")
+                    # Extract the ID from the selected option
+                    lead_id = selected_lead.split(" - ")[-1]
                     
-                    # FIX: Check if lead exists before accessing it
-                    lead_match = filtered_leads[(filtered_leads["Name"] == lead_name) & (filtered_leads["Phone"] == lead_phone)]
+                    # Find the lead by ID
+                    lead_match = filtered_leads[filtered_leads["ID"] == lead_id]
                     if lead_match.empty:
                         st.warning("Selected lead not found. Please select another lead.")
                     else:
@@ -1074,7 +1091,7 @@ def leads_page():
                             
                             if st.form_submit_button("Update Lead"):
                                 # Update the lead in the dataframe
-                                idx = leads_df[(leads_df["Name"] == lead_name) & (leads_df["Phone"] == lead_phone)].index
+                                idx = leads_df[leads_df["ID"] == lead_id].index
                                 if len(idx) > 0:
                                     idx = idx[0]
                                     leads_df.at[idx, "Status"] = new_status
@@ -1188,20 +1205,21 @@ def leads_page():
             st.info("No leads found. Add your first lead in the 'Add New Lead' tab.")
         else:
             # Select lead to view timeline
-            lead_options = [f"{row['Name']} ({row['Phone']})" for _, row in leads_df.iterrows()]
+            lead_options = [f"{row['Name']} ({row['Phone']}) - {row['ID']}" for _, row in leads_df.iterrows()]
             selected_lead = st.selectbox("Select Lead", options=lead_options, key="timeline_lead_select")
             
             if selected_lead:
-                lead_name = selected_lead.split(" (")[0]
-                lead_phone = selected_lead.split(" (")[1].replace(")", "")
+                # Extract the ID from the selected option
+                lead_id = selected_lead.split(" - ")[-1]
                 
-                # FIX: Check if lead exists before accessing it
-                lead_match = leads_df[(leads_df["Name"] == lead_name) & (leads_df["Phone"] == lead_phone)]
+                # Find the lead by ID
+                lead_match = leads_df[leads_df["ID"] == lead_id]
                 if lead_match.empty:
                     st.warning("Selected lead not found. Please select another lead.")
                 else:
                     lead_data = lead_match.iloc[0]
-                    lead_id = lead_data["ID"]
+                    lead_name = lead_data["Name"]
+                    lead_phone = lead_data["Phone"]
                     
                     # Display timeline
                     display_lead_timeline(lead_id, lead_name, lead_phone)
@@ -1282,7 +1300,7 @@ def leads_page():
                 with col2:
                     related_to = st.selectbox("Related To", options=["Lead", "Appointment", "Other"])
                     if related_to == "Lead":
-                        lead_options = [f"{row['Name']} ({row['Phone']})" for _, row in leads_df.iterrows()]
+                        lead_options = [f"{row['Name']} ({row['Phone']}) - {row['ID']}" for _, row in leads_df.iterrows()]
                         related_id = st.selectbox("Select Lead", options=lead_options)
                     else:
                         related_id = st.text_input("Related ID")
@@ -1388,7 +1406,7 @@ def leads_page():
                 with col2:
                     related_to = st.selectbox("Related To", options=["Lead", "Other"])
                     if related_to == "Lead":
-                        lead_options = [f"{row['Name']} ({row['Phone']})" for _, row in leads_df.iterrows()]
+                        lead_options = [f"{row['Name']} ({row['Phone']}) - {row['ID']}" for _, row in leads_df.iterrows()]
                         related_id = st.selectbox("Select Lead", options=lead_options)
                     else:
                         related_id = st.text_input("Related ID")
@@ -1481,7 +1499,7 @@ def leads_page():
     with tab7:
         display_lead_analytics(leads_df, activities_df)
 
-# --- Plots Page (Unchanged) ---
+# --- Plots Page (Updated with direct dialing) ---
 def plots_page():
     st.header("🏡 Property Listings")
     
@@ -1506,7 +1524,7 @@ def plots_page():
         # Property Type filter
         prop_type_options = ["All"]
         if "Property Type" in df.columns:
-            prop_type_options += sorted([str(v).strip() for v in df["Property Type"].dropna().astype(str).unique()])
+            prop_type_options += sorted([str(v).strip() for v in df["Property Type"].dropna().ast(str).unique()])
         selected_prop_type = st.selectbox("Property Type", prop_type_options)
 
         dealer_names, contact_to_name = build_name_map(df)
@@ -1585,9 +1603,14 @@ def plots_page():
     
     st.info(f"📊 Total filtered listings: {len(df_filtered)} | ✅ WhatsApp eligible: {whatsapp_eligible_count}")
     
+    # Format the Extracted Contact column with dialer links
+    display_df = df_filtered.copy()
+    if "Extracted Contact" in display_df.columns:
+        display_df["Extracted Contact"] = display_df["Extracted Contact"].apply(format_contact_column)
+    
     # Row selection and deletion feature for main table
     if not df_filtered.empty:
-        display_df = df_filtered.copy().reset_index(drop=True)
+        display_df = display_df.reset_index(drop=True)
         display_df.insert(0, "Select", False)
         
         # Add "Select All" checkbox
@@ -1651,9 +1674,14 @@ def plots_page():
         else:
             st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
             
+            # Format the Extracted Contact column with dialer links for duplicates
+            duplicates_display = duplicates_df.copy()
+            if "Extracted Contact" in duplicates_display.columns:
+                duplicates_display["Extracted Contact"] = duplicates_display["Extracted Contact"].apply(format_contact_column)
+            
             # Display the styled DataFrame (color-coded)
             st.dataframe(
-                styled_duplicates_df,
+                duplicates_display,
                 use_container_width=True,
                 hide_index=True
             )
