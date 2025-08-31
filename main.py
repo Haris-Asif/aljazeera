@@ -61,14 +61,25 @@ def get_gsheet_client():
     return gspread.authorize(creds)
 
 def load_plot_data():
-    sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
-    df = pd.DataFrame(sheet.get_all_records())
-    df["SheetRowNum"] = [i + 2 for i in range(len(df))]  # Start from row 2
-    return df
+    try:
+        sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
+        df = pd.DataFrame(sheet.get_all_records())
+        if not df.empty:
+            df["SheetRowNum"] = [i + 2 for i in range(len(df))]  # Start from row 2
+        else:
+            df = pd.DataFrame(columns=["SheetRowNum"])
+        return df
+    except Exception as e:
+        st.error(f"Error loading plot data: {str(e)}")
+        return pd.DataFrame(columns=["SheetRowNum"])
 
 def load_contacts():
-    sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
-    return pd.DataFrame(sheet.get_all_records())
+    try:
+        sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
+        return pd.DataFrame(sheet.get_all_records())
+    except Exception as e:
+        st.error(f"Error loading contacts: {str(e)}")
+        return pd.DataFrame()
 
 def load_leads():
     try:
@@ -83,14 +94,31 @@ def load_leads():
             ])
         return df
     except gspread.exceptions.WorksheetNotFound:
-        sheet = get_gsheet_client().open(SPREADSHEET_NAME)
-        worksheet = sheet.add_worksheet(title=LEADS_SHEET, rows=100, cols=19)
-        worksheet.append_row([
-            "ID", "Timestamp", "Name", "Phone", "Email", "Source", "Status", 
-            "Priority", "Property Interest", "Budget", "Location Preference",
-            "Last Contact", "Next Action", "Next Action Type", "Notes", 
-            "Assigned To", "Lead Score", "Type", "Timeline"
-        ])
+        try:
+            sheet = get_gsheet_client().open(SPREADSHEET_NAME)
+            worksheet = sheet.add_worksheet(title=LEADS_SHEET, rows=100, cols=19)
+            worksheet.append_row([
+                "ID", "Timestamp", "Name", "Phone", "Email", "Source", "Status", 
+                "Priority", "Property Interest", "Budget", "Location Preference",
+                "Last Contact", "Next Action", "Next Action Type", "Notes", 
+                "Assigned To", "Lead Score", "Type", "Timeline"
+            ])
+            return pd.DataFrame(columns=[
+                "ID", "Timestamp", "Name", "Phone", "Email", "Source", "Status", 
+                "Priority", "Property Interest", "Budget", "Location Preference",
+                "Last Contact", "Next Action", "Next Action Type", "Notes", 
+                "Assigned To", "Lead Score", "Type", "Timeline"
+            ])
+        except Exception as e:
+            st.error(f"Error creating leads sheet: {str(e)}")
+            return pd.DataFrame(columns=[
+                "ID", "Timestamp", "Name", "Phone", "Email", "Source", "Status", 
+                "Priority", "Property Interest", "Budget", "Location Preference",
+                "Last Contact", "Next Action", "Next Action Type", "Notes", 
+                "Assigned To", "Lead Score", "Type", "Timeline"
+            ])
+    except Exception as e:
+        st.error(f"Error loading leads: {str(e)}")
         return pd.DataFrame(columns=[
             "ID", "Timestamp", "Name", "Phone", "Email", "Source", "Status", 
             "Priority", "Property Interest", "Budget", "Location Preference",
@@ -109,12 +137,25 @@ def load_lead_activities():
             ])
         return df
     except gspread.exceptions.WorksheetNotFound:
-        sheet = get_gsheet_client().open(SPREADSHEET_NAME)
-        worksheet = sheet.add_worksheet(title=ACTIVITIES_SHEET, rows=100, cols=11)
-        worksheet.append_row([
-            "ID", "Timestamp", "Lead ID", "Lead Name", "Lead Phone", "Activity Type", 
-            "Details", "Next Steps", "Follow-up Date", "Duration", "Outcome"
-        ])
+        try:
+            sheet = get_gsheet_client().open(SPREADSHEET_NAME)
+            worksheet = sheet.add_worksheet(title=ACTIVITIES_SHEET, rows=100, cols=11)
+            worksheet.append_row([
+                "ID", "Timestamp", "Lead ID", "Lead Name", "Lead Phone", "Activity Type", 
+                "Details", "Next Steps", "Follow-up Date", "Duration", "Outcome"
+            ])
+            return pd.DataFrame(columns=[
+                "ID", "Timestamp", "Lead ID", "Lead Name", "Lead Phone", "Activity Type", 
+                "Details", "Next Steps", "Follow-up Date", "Duration", "Outcome"
+            ])
+        except Exception as e:
+            st.error(f"Error creating activities sheet: {str(e)}")
+            return pd.DataFrame(columns=[
+                "ID", "Timestamp", "Lead ID", "Lead Name", "Lead Phone", "Activity Type", 
+                "Details", "Next Steps", "Follow-up Date", "Duration", "Outcome"
+            ])
+    except Exception as e:
+        st.error(f"Error loading activities: {str(e)}")
         return pd.DataFrame(columns=[
             "ID", "Timestamp", "Lead ID", "Lead Name", "Lead Phone", "Activity Type", 
             "Details", "Next Steps", "Follow-up Date", "Duration", "Outcome"
@@ -131,12 +172,25 @@ def load_tasks():
             ])
         return df
     except gspread.exceptions.WorksheetNotFound:
-        sheet = get_gsheet_client().open(SPREADSHEET_NAME)
-        worksheet = sheet.add_worksheet(title=TASKS_SHEET, rows=100, cols=11)
-        worksheet.append_row([
-            "ID", "Timestamp", "Title", "Description", "Due Date", "Priority", 
-            "Status", "Assigned To", "Related To", "Related ID", "Completed Date"
-        ])
+        try:
+            sheet = get_gsheet_client().open(SPREADSHEET_NAME)
+            worksheet = sheet.add_worksheet(title=TASKS_SHEET, rows=100, cols=11)
+            worksheet.append_row([
+                "ID", "Timestamp", "Title", "Description", "Due Date", "Priority", 
+                "Status", "Assigned To", "Related To", "Related ID", "Completed Date"
+            ])
+            return pd.DataFrame(columns=[
+                "ID", "Timestamp", "Title", "Description", "Due Date", "Priority", 
+                "Status", "Assigned To", "Related To", "Related ID", "Completed Date"
+            ])
+        except Exception as e:
+            st.error(f"Error creating tasks sheet: {str(e)}")
+            return pd.DataFrame(columns=[
+                "ID", "Timestamp", "Title", "Description", "Due Date", "Priority", 
+                "Status", "Assigned To", "Related To", "Related ID", "Completed Date"
+            ])
+    except Exception as e:
+        st.error(f"Error loading tasks: {str(e)}")
         return pd.DataFrame(columns=[
             "ID", "Timestamp", "Title", "Description", "Due Date", "Priority", 
             "Status", "Assigned To", "Related To", "Related ID", "Completed Date"
@@ -154,13 +208,28 @@ def load_appointments():
             ])
         return df
     except gspread.exceptions.WorksheetNotFound:
-        sheet = get_gsheet_client().open(SPREADSHEET_NAME)
-        worksheet = sheet.add_worksheet(title=APPOINTMENTS_SHEET, rows=100, cols=13)
-        worksheet.append_row([
-            "ID", "Timestamp", "Title", "Description", "Date", "Time", 
-            "Duration", "Attendees", "Location", "Status", "Related To", 
-            "Related ID", "Outcome"
-        ])
+        try:
+            sheet = get_gsheet_client().open(SPREADSHEET_NAME)
+            worksheet = sheet.add_worksheet(title=APPOINTMENTS_SHEET, rows=100, cols=13)
+            worksheet.append_row([
+                "ID", "Timestamp", "Title", "Description", "Date", "Time", 
+                "Duration", "Attendees", "Location", "Status", "Related To", 
+                "Related ID", "Outcome"
+            ])
+            return pd.DataFrame(columns=[
+                "ID", "Timestamp", "Title", "Description", "Date", "Time", 
+                "Duration", "Attendees", "Location", "Status", "Related To", 
+                "Related ID", "Outcome"
+            ])
+        except Exception as e:
+            st.error(f"Error creating appointments sheet: {str(e)}")
+            return pd.DataFrame(columns=[
+                "ID", "Timestamp", "Title", "Description", "Date", "Time", 
+                "Duration", "Attendees", "Location", "Status", "Related To", 
+                "Related ID", "Outcome"
+            ])
+    except Exception as e:
+        st.error(f"Error loading appointments: {str(e)}")
         return pd.DataFrame(columns=[
             "ID", "Timestamp", "Title", "Description", "Date", "Time", 
             "Duration", "Attendees", "Location", "Status", "Related To", 
@@ -168,105 +237,125 @@ def load_appointments():
         ])
 
 def save_leads(df):
-    sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(LEADS_SHEET)
-    sheet.clear()
-    sheet.append_row([
-        "ID", "Timestamp", "Name", "Phone", "Email", "Source", "Status", 
-        "Priority", "Property Interest", "Budget", "Location Preference",
-        "Last Contact", "Next Action", "Next Action Type", "Notes", 
-        "Assigned To", "Lead Score", "Type", "Timeline"
-    ])
-    for _, row in df.iterrows():
+    try:
+        sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(LEADS_SHEET)
+        sheet.clear()
         sheet.append_row([
-            row.get("ID", ""),
-            row.get("Timestamp", ""),
-            row.get("Name", ""),
-            row.get("Phone", ""),
-            row.get("Email", ""),
-            row.get("Source", ""),
-            row.get("Status", ""),
-            row.get("Priority", ""),
-            row.get("Property Interest", ""),
-            row.get("Budget", ""),
-            row.get("Location Preference", ""),
-            row.get("Last Contact", ""),
-            row.get("Next Action", ""),
-            row.get("Next Action Type", ""),
-            row.get("Notes", ""),
-            row.get("Assigned To", ""),
-            row.get("Lead Score", ""),
-            row.get("Type", ""),
-            row.get("Timeline", "")
+            "ID", "Timestamp", "Name", "Phone", "Email", "Source", "Status", 
+            "Priority", "Property Interest", "Budget", "Location Preference",
+            "Last Contact", "Next Action", "Next Action Type", "Notes", 
+            "Assigned To", "Lead Score", "Type", "Timeline"
         ])
+        for _, row in df.iterrows():
+            sheet.append_row([
+                row.get("ID", ""),
+                row.get("Timestamp", ""),
+                row.get("Name", ""),
+                row.get("Phone", ""),
+                row.get("Email", ""),
+                row.get("Source", ""),
+                row.get("Status", ""),
+                row.get("Priority", ""),
+                row.get("Property Interest", ""),
+                row.get("Budget", ""),
+                row.get("Location Preference", ""),
+                row.get("Last Contact", ""),
+                row.get("Next Action", ""),
+                row.get("Next Action Type", ""),
+                row.get("Notes", ""),
+                row.get("Assigned To", ""),
+                row.get("Lead Score", ""),
+                row.get("Type", ""),
+                row.get("Timeline", "")
+            ])
+        return True
+    except Exception as e:
+        st.error(f"Error saving leads: {str(e)}")
+        return False
 
 def save_lead_activity(df):
-    sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(ACTIVITIES_SHEET)
-    sheet.clear()
-    sheet.append_row([
-        "ID", "Timestamp", "Lead ID", "Lead Name", "Lead Phone", "Activity Type", 
-        "Details", "Next Steps", "Follow-up Date", "Duration", "Outcome"
-    ])
-    for _, row in df.iterrows():
+    try:
+        sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(ACTIVITIES_SHEET)
+        sheet.clear()
         sheet.append_row([
-            row.get("ID", ""),
-            row.get("Timestamp", ""),
-            row.get("Lead ID", ""),
-            row.get("Lead Name", ""),
-            row.get("Lead Phone", ""),
-            row.get("Activity Type", ""),
-            row.get("Details", ""),
-            row.get("Next Steps", ""),
-            row.get("Follow-up Date", ""),
-            row.get("Duration", ""),
-            row.get("Outcome", "")
+            "ID", "Timestamp", "Lead ID", "Lead Name", "Lead Phone", "Activity Type", 
+            "Details", "Next Steps", "Follow-up Date", "Duration", "Outcome"
         ])
+        for _, row in df.iterrows():
+            sheet.append_row([
+                row.get("ID", ""),
+                row.get("Timestamp", ""),
+                row.get("Lead ID", ""),
+                row.get("Lead Name", ""),
+                row.get("Lead Phone", ""),
+                row.get("Activity Type", ""),
+                row.get("Details", ""),
+                row.get("Next Steps", ""),
+                row.get("Follow-up Date", ""),
+                row.get("Duration", ""),
+                row.get("Outcome", "")
+            ])
+        return True
+    except Exception as e:
+        st.error(f"Error saving activities: {str(e)}")
+        return False
 
 def save_tasks(df):
-    sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(TASKS_SHEET)
-    sheet.clear()
-    sheet.append_row([
-        "ID", "Timestamp", "Title", "Description", "Due Date", "Priority", 
-        "Status", "Assigned To", "Related To", "Related ID", "Completed Date"
-    ])
-    for _, row in df.iterrows():
+    try:
+        sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(TASKS_SHEET)
+        sheet.clear()
         sheet.append_row([
-            row.get("ID", ""),
-            row.get("Timestamp", ""),
-            row.get("Title", ""),
-            row.get("Description", ""),
-            row.get("Due Date", ""),
-            row.get("Priority", ""),
-            row.get("Status", ""),
-            row.get("Assigned To", ""),
-            row.get("Related To", ""),
-            row.get("Related ID", ""),
-            row.get("Completed Date", "")
+            "ID", "Timestamp", "Title", "Description", "Due Date", "Priority", 
+            "Status", "Assigned To", "Related To", "Related ID", "Completed Date"
         ])
+        for _, row in df.iterrows():
+            sheet.append_row([
+                row.get("ID", ""),
+                row.get("Timestamp", ""),
+                row.get("Title", ""),
+                row.get("Description", ""),
+                row.get("Due Date", ""),
+                row.get("Priority", ""),
+                row.get("Status", ""),
+                row.get("Assigned To", ""),
+                row.get("Related To", ""),
+                row.get("Related ID", ""),
+                row.get("Completed Date", "")
+            ])
+        return True
+    except Exception as e:
+        st.error(f"Error saving tasks: {str(e)}")
+        return False
 
 def save_appointments(df):
-    sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(APPOINTMENTS_SHEET)
-    sheet.clear()
-    sheet.append_row([
-        "ID", "Timestamp", "Title", "Description", "Date", "Time", 
-        "Duration", "Attendees", "Location", "Status", "Related To", 
-        "Related ID", "Outcome"
-    ])
-    for _, row in df.iterrows():
+    try:
+        sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(APPOINTMENTS_SHEET)
+        sheet.clear()
         sheet.append_row([
-            row.get("ID", ""),
-            row.get("Timestamp", ""),
-            row.get("Title", ""),
-            row.get("Description", ""),
-            row.get("Date", ""),
-            row.get("Time", ""),
-            row.get("Duration", ""),
-            row.get("Attendees", ""),
-            row.get("Location", ""),
-            row.get("Status", ""),
-            row.get("Related To", ""),
-            row.get("Related ID", ""),
-            row.get("Outcome", "")
+            "ID", "Timestamp", "Title", "Description", "Date", "Time", 
+            "Duration", "Attendees", "Location", "Status", "Related To", 
+            "Related ID", "Outcome"
         ])
+        for _, row in df.iterrows():
+            sheet.append_row([
+                row.get("ID", ""),
+                row.get("Timestamp", ""),
+                row.get("Title", ""),
+                row.get("Description", ""),
+                row.get("Date", ""),
+                row.get("Time", ""),
+                row.get("Duration", ""),
+                row.get("Attendees", ""),
+                row.get("Location", ""),
+                row.get("Status", ""),
+                row.get("Related To", ""),
+                row.get("Related ID", ""),
+                row.get("Outcome", "")
+            ])
+        return True
+    except Exception as e:
+        st.error(f"Error saving appointments: {str(e)}")
+        return False
 
 def filter_by_date(df, label):
     if label == "All":
@@ -303,6 +392,7 @@ def build_name_map(df):
             if c in merged:
                 name_set[merged[c]] = True
     
+    # Create a list of dealer names with serial numbers
     numbered_dealers = []
     for i, name in enumerate(sorted(name_set.keys()), 1):
         numbered_dealers.append(f"{i}. {name}")
@@ -630,56 +720,98 @@ def display_lead_timeline(lead_id, lead_name, lead_phone):
 def display_lead_analytics(leads_df, activities_df):
     st.subheader("📊 Lead Analytics")
     
+    if leads_df.empty:
+        st.info("No leads data available for analytics.")
+        return
+    
     col1, col2, col3 = st.columns(3)
     
     with col1:
         # Lead status distribution
-        status_counts = leads_df["Status"].value_counts()
-        fig_status = px.pie(values=status_counts.values, names=status_counts.index, 
-                           title="Leads by Status")
-        st.plotly_chart(fig_status, use_container_width=True)
+        if "Status" in leads_df.columns:
+            status_counts = leads_df["Status"].value_counts()
+            if not status_counts.empty:
+                # Create a DataFrame for Plotly
+                status_df = pd.DataFrame({
+                    'Status': status_counts.index,
+                    'Count': status_counts.values
+                })
+                fig_status = px.pie(status_df, values='Count', names='Status', title="Leads by Status")
+                st.plotly_chart(fig_status, use_container_width=True)
+            else:
+                st.info("No status data available.")
+        else:
+            st.info("No status data available.")
     
     with col2:
         # Lead source distribution
-        source_counts = leads_df["Source"].value_counts()
-        fig_source = px.bar(x=source_counts.values, y=source_counts.index, orientation='h',
-                           title="Leads by Source", labels={'x':'Count', 'y':'Source'})
-        st.plotly_chart(fig_source, use_container_width=True)
+        if "Source" in leads_df.columns:
+            source_counts = leads_df["Source"].value_counts()
+            if not source_counts.empty:
+                # Create a DataFrame for Plotly
+                source_df = pd.DataFrame({
+                    'Source': source_counts.index,
+                    'Count': source_counts.values
+                })
+                fig_source = px.bar(source_df, x='Count', y='Source', orientation='h',
+                                  title="Leads by Source", labels={'Count':'Count', 'Source':'Source'})
+                st.plotly_chart(fig_source, use_container_width=True)
+            else:
+                st.info("No source data available.")
+        else:
+            st.info("No source data available.")
     
     with col3:
         # Lead score distribution
         if "Lead Score" in leads_df.columns:
-            fig_score = px.histogram(leads_df, x="Lead Score", nbins=10, 
-                                   title="Lead Score Distribution")
-            st.plotly_chart(fig_score, use_container_width=True)
+            try:
+                leads_df["Lead Score"] = pd.to_numeric(leads_df["Lead Score"], errors='coerce')
+                score_data = leads_df["Lead Score"].dropna()
+                if not score_data.empty:
+                    fig_score = px.histogram(leads_df, x="Lead Score", nbins=10, 
+                                           title="Lead Score Distribution")
+                    st.plotly_chart(fig_score, use_container_width=True)
+                else:
+                    st.info("No lead score data available.")
+            except:
+                st.info("No lead score data available.")
         else:
-            st.info("No lead score data available")
+            st.info("No lead score data available.")
     
     # Conversion funnel
     st.subheader("📈 Conversion Funnel")
     funnel_data = {
         "Stage": ["New", "Contacted", "Meeting", "Negotiation", "Closed Won"],
         "Count": [
-            len(leads_df[leads_df["Status"] == "New"]),
-            len(leads_df[leads_df["Status"].isin(["Contacted", "Follow-up"])]),
-            len(leads_df[leads_df["Status"] == "Meeting Scheduled"]),
-            len(leads_df[leads_df["Status"].isin(["Negotiation", "Offer Made"])]),
-            len(leads_df[leads_df["Status"] == "Deal Closed (Won)"])
+            len(leads_df[leads_df["Status"] == "New"]) if "Status" in leads_df.columns else 0,
+            len(leads_df[leads_df["Status"].isin(["Contacted", "Follow-up"])]) if "Status" in leads_df.columns else 0,
+            len(leads_df[leads_df["Status"] == "Meeting Scheduled"]) if "Status" in leads_df.columns else 0,
+            len(leads_df[leads_df["Status"].isin(["Negotiation", "Offer Made"])]) if "Status" in leads_df.columns else 0,
+            len(leads_df[leads_df["Status"] == "Deal Closed (Won)"]) if "Status" in leads_df.columns else 0
         ]
     }
     
-    fig_funnel = px.funnel(funnel_data, x='Count', y='Stage', title="Lead Conversion Funnel")
+    funnel_df = pd.DataFrame(funnel_data)
+    fig_funnel = px.funnel(funnel_df, x='Count', y='Stage', title="Lead Conversion Funnel")
     st.plotly_chart(fig_funnel, use_container_width=True)
     
     # Activities over time
     st.subheader("📅 Activities Over Time")
-    if not activities_df.empty:
-        activities_df["Date"] = pd.to_datetime(activities_df["Timestamp"]).dt.date
-        activities_by_date = activities_df.groupby("Date").size().reset_index(name="Count")
-        
-        fig_activities = px.line(activities_by_date, x="Date", y="Count", 
-                                title="Daily Activities Trend")
-        st.plotly_chart(fig_activities, use_container_width=True)
+    if not activities_df.empty and "Timestamp" in activities_df.columns:
+        try:
+            activities_df["Date"] = pd.to_datetime(activities_df["Timestamp"]).dt.date
+            activities_by_date = activities_df.groupby("Date").size().reset_index(name="Count")
+            
+            if not activities_by_date.empty:
+                fig_activities = px.line(activities_by_date, x="Date", y="Count", 
+                                        title="Daily Activities Trend")
+                st.plotly_chart(fig_activities, use_container_width=True)
+            else:
+                st.info("No activities data available.")
+        except:
+            st.info("No activities data available.")
+    else:
+        st.info("No activities data available.")
 
 def leads_page():
     st.header("👥 Lead Management CRM")
@@ -701,10 +833,16 @@ def leads_page():
     
     # Count overdue actions
     today = datetime.now().date()
-    overdue_tasks = len(tasks_df[
-        (tasks_df["Status"] != "Completed") & 
-        (pd.to_datetime(tasks_df["Due Date"]).dt.date < today)
-    ]) if "Due Date" in tasks_df.columns else 0
+    overdue_tasks = 0
+    if "Due Date" in tasks_df.columns and "Status" in tasks_df.columns:
+        try:
+            tasks_df["Due Date"] = pd.to_datetime(tasks_df["Due Date"], errors='coerce').dt.date
+            overdue_tasks = len(tasks_df[
+                (tasks_df["Status"] != "Completed") & 
+                (tasks_df["Due Date"] < today)
+            ])
+        except:
+            overdue_tasks = 0
     
     # Display metrics
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -725,15 +863,21 @@ def leads_page():
         st.warning(f"⚠️ You have {overdue_tasks} overdue tasks. Check the Tasks tab.")
     
     # Upcoming appointments
-    upcoming_appointments = appointments_df[
-        (pd.to_datetime(appointments_df["Date"]).dt.date >= today) &
-        (pd.to_datetime(appointments_df["Date"]).dt.date <= today + timedelta(days=7))
-    ]
+    upcoming_appointments = pd.DataFrame()
+    if not appointments_df.empty and "Date" in appointments_df.columns:
+        try:
+            appointments_df["Date"] = pd.to_datetime(appointments_df["Date"], errors='coerce').dt.date
+            upcoming_appointments = appointments_df[
+                (appointments_df["Date"] >= today) &
+                (appointments_df["Date"] <= today + timedelta(days=7))
+            ]
+        except:
+            upcoming_appointments = pd.DataFrame()
     
     if len(upcoming_appointments) > 0:
         with st.expander("📅 Upcoming Appointments (Next 7 Days)"):
             for _, appt in upcoming_appointments.iterrows():
-                st.write(f"{appt['Date']} - {appt['Time']}: {appt['Title']} with {appt['Attendees']}")
+                st.write(f"{appt['Date']} - {appt.get('Time', '')}: {appt.get('Title', '')} with {appt.get('Attendees', '')}")
     
     # Tabs for different views
     tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
@@ -757,17 +901,33 @@ def leads_page():
         with col2:
             # Recent activities
             st.info("**Recent Activities**")
-            recent_activities = activities_df.sort_values("Timestamp", ascending=False).head(5)
-            for _, activity in recent_activities.iterrows():
-                st.write(f"{activity['Timestamp']}: {activity['Activity Type']} with {activity['Lead Name']}")
+            if not activities_df.empty and "Timestamp" in activities_df.columns:
+                try:
+                    recent_activities = activities_df.sort_values("Timestamp", ascending=False).head(5)
+                    for _, activity in recent_activities.iterrows():
+                        st.write(f"{activity['Timestamp']}: {activity.get('Activity Type', '')} with {activity.get('Lead Name', '')}")
+                except:
+                    st.info("No recent activities.")
+            else:
+                st.info("No recent activities.")
         
         # Lead status chart
         st.info("**Lead Status Overview**")
         if not leads_df.empty and "Status" in leads_df.columns:
             status_chart_data = leads_df["Status"].value_counts()
-            fig = px.bar(x=status_chart_data.values, y=status_chart_data.index, orientation='h',
-                        labels={'x': 'Count', 'y': 'Status'}, title="Leads by Status")
-            st.plotly_chart(fig, use_container_width=True)
+            if not status_chart_data.empty:
+                # Create a DataFrame for the chart
+                status_df = pd.DataFrame({
+                    'Status': status_chart_data.index,
+                    'Count': status_chart_data.values
+                })
+                fig = px.bar(status_df, x='Status', y='Count', 
+                            labels={'Count': 'Count', 'Status': 'Status'}, title="Leads by Status")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No status data available.")
+        else:
+            st.info("No status data available.")
     
     with tab2:
         st.subheader("All Leads")
@@ -778,21 +938,17 @@ def leads_page():
             # Filters
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                status_filter = st.selectbox("Filter by Status", 
-                                           options=["All"] + list(leads_df["Status"].unique()) if "Status" in leads_df.columns else ["All"],
-                                           key="status_filter")
+                status_options = ["All"] + list(leads_df["Status"].unique()) if "Status" in leads_df.columns else ["All"]
+                status_filter = st.selectbox("Filter by Status", options=status_options, key="status_filter")
             with col2:
-                priority_filter = st.selectbox("Filter by Priority", 
-                                             options=["All"] + list(leads_df["Priority"].unique()) if "Priority" in leads_df.columns else ["All"],
-                                             key="priority_filter")
+                priority_options = ["All"] + list(leads_df["Priority"].unique()) if "Priority" in leads_df.columns else ["All"]
+                priority_filter = st.selectbox("Filter by Priority", options=priority_options, key="priority_filter")
             with col3:
-                source_filter = st.selectbox("Filter by Source", 
-                                           options=["All"] + list(leads_df["Source"].unique()) if "Source" in leads_df.columns else ["All"],
-                                           key="source_filter")
+                source_options = ["All"] + list(leads_df["Source"].unique()) if "Source" in leads_df.columns else ["All"]
+                source_filter = st.selectbox("Filter by Source", options=source_options, key="source_filter")
             with col4:
-                assigned_filter = st.selectbox("Filter by Assigned To", 
-                                             options=["All"] + list(leads_df["Assigned To"].unique()) if "Assigned To" in leads_df.columns else ["All"],
-                                             key="assigned_filter")
+                assigned_options = ["All"] + list(leads_df["Assigned To"].unique()) if "Assigned To" in leads_df.columns else ["All"]
+                assigned_filter = st.selectbox("Filter by Assigned To", options=assigned_options, key="assigned_filter")
             
             # Apply filters
             filtered_leads = leads_df.copy()
@@ -821,28 +977,50 @@ def leads_page():
                     with st.form("update_lead_form"):
                         col1, col2 = st.columns(2)
                         with col1:
-                            new_status = st.selectbox("Status", 
-                                                    options=["New", "Contacted", "Follow-up", "Meeting Scheduled", 
-                                                            "Negotiation", "Offer Made", "Deal Closed (Won)", "Not Interested (Lost)"],
-                                                    index=0 if pd.isna(lead_data.get("Status")) else 
-                                                    ["New", "Contacted", "Follow-up", "Meeting Scheduled", 
-                                                     "Negotiation", "Offer Made", "Deal Closed (Won)", "Not Interested (Lost)"].index(lead_data.get("Status")))
-                            new_priority = st.selectbox("Priority", 
-                                                      options=["Low", "Medium", "High"],
-                                                      index=0 if pd.isna(lead_data.get("Priority")) else 
-                                                      ["Low", "Medium", "High"].index(lead_data.get("Priority")))
-                            new_next_action = st.date_input("Next Action", 
-                                                          value=datetime.strptime(lead_data.get("Next Action"), "%Y-%m-%d").date() 
-                                                          if lead_data.get("Next Action") and pd.notna(lead_data.get("Next Action")) else datetime.now().date())
-                            new_next_action_type = st.selectbox("Next Action Type",
-                                                              options=["Call", "Email", "Meeting", "Site Visit", "Follow-up"],
-                                                              index=0 if pd.isna(lead_data.get("Next Action Type")) else 
-                                                              ["Call", "Email", "Meeting", "Site Visit", "Follow-up"].index(lead_data.get("Next Action Type")))
+                            status_options = ["New", "Contacted", "Follow-up", "Meeting Scheduled", 
+                                            "Negotiation", "Offer Made", "Deal Closed (Won)", "Not Interested (Lost)"]
+                            current_status = lead_data.get("Status", "New")
+                            status_index = status_options.index(current_status) if current_status in status_options else 0
+                            new_status = st.selectbox("Status", options=status_options, index=status_index)
+                            
+                            priority_options = ["Low", "Medium", "High"]
+                            current_priority = lead_data.get("Priority", "Low")
+                            priority_index = priority_options.index(current_priority) if current_priority in priority_options else 0
+                            new_priority = st.selectbox("Priority", options=priority_options, index=priority_index)
+                            
+                            # Next action date
+                            next_action_date = datetime.now().date()
+                            if lead_data.get("Next Action") and pd.notna(lead_data.get("Next Action")):
+                                try:
+                                    next_action_date = datetime.strptime(lead_data.get("Next Action"), "%Y-%m-%d").date()
+                                except:
+                                    pass
+                            new_next_action = st.date_input("Next Action", value=next_action_date)
+                            
+                            # Next action type
+                            action_type_options = ["Call", "Email", "Meeting", "Site Visit", "Follow-up"]
+                            current_action_type = lead_data.get("Next Action Type", "Call")
+                            action_type_index = action_type_options.index(current_action_type) if current_action_type in action_type_options else 0
+                            new_next_action_type = st.selectbox("Next Action Type", options=action_type_options, index=action_type_index)
+                        
                         with col2:
-                            new_last_contact = st.date_input("Last Contact", 
-                                                           value=datetime.strptime(lead_data.get("Last Contact"), "%Y-%m-%d").date() 
-                                                           if lead_data.get("Last Contact") and pd.notna(lead_data.get("Last Contact")) else datetime.now().date())
-                            new_budget = st.number_input("Budget (₹)", value=int(lead_data.get("Budget", 0)) if lead_data.get("Budget") and str(lead_data.get("Budget")).isdigit() else 0)
+                            # Last contact date
+                            last_contact_date = datetime.now().date()
+                            if lead_data.get("Last Contact") and pd.notna(lead_data.get("Last Contact")):
+                                try:
+                                    last_contact_date = datetime.strptime(lead_data.get("Last Contact"), "%Y-%m-%d").date()
+                                except:
+                                    pass
+                            new_last_contact = st.date_input("Last Contact", value=last_contact_date)
+                            
+                            # Budget
+                            current_budget = lead_data.get("Budget", 0)
+                            if isinstance(current_budget, str) and current_budget.isdigit():
+                                current_budget = int(current_budget)
+                            elif not isinstance(current_budget, (int, float)):
+                                current_budget = 0
+                            new_budget = st.number_input("Budget (₹)", value=current_budget)
+                            
                             new_location = st.text_input("Location Preference", value=lead_data.get("Location Preference", ""))
                             new_notes = st.text_area("Notes", value=lead_data.get("Notes", ""))
                         
@@ -862,9 +1040,11 @@ def leads_page():
                             leads_df.at[idx, "Lead Score"] = calculate_lead_score(leads_df.iloc[idx], activities_df)
                             
                             # Save to Google Sheets
-                            save_leads(leads_df)
-                            st.success("Lead updated successfully!")
-                            st.rerun()
+                            if save_leads(leads_df):
+                                st.success("Lead updated successfully!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to update lead. Please try again.")
     
     with tab3:
         st.subheader("Add New Lead")
@@ -924,28 +1104,30 @@ def leads_page():
                     leads_df = pd.concat([leads_df, pd.DataFrame([new_lead])], ignore_index=True)
                     
                     # Save to Google Sheets
-                    save_leads(leads_df)
-                    
-                    # Create initial activity
-                    new_activity = {
-                        "ID": generate_activity_id(),
-                        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "Lead ID": lead_id,
-                        "Lead Name": name,
-                        "Lead Phone": phone,
-                        "Activity Type": "Status Update",
-                        "Details": f"New lead created. Status: {status}, Priority: {priority}",
-                        "Next Steps": "Initial contact",
-                        "Follow-up Date": (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"),
-                        "Duration": "5",
-                        "Outcome": "Lead created"
-                    }
-                    
-                    activities_df = pd.concat([activities_df, pd.DataFrame([new_activity])], ignore_index=True)
-                    save_lead_activity(activities_df)
-                    
-                    st.success("Lead added successfully!")
-                    st.rerun()
+                    if save_leads(leads_df):
+                        # Create initial activity
+                        new_activity = {
+                            "ID": generate_activity_id(),
+                            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "Lead ID": lead_id,
+                            "Lead Name": name,
+                            "Lead Phone": phone,
+                            "Activity Type": "Status Update",
+                            "Details": f"New lead created. Status: {status}, Priority: {priority}",
+                            "Next Steps": "Initial contact",
+                            "Follow-up Date": (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"),
+                            "Duration": "5",
+                            "Outcome": "Lead created"
+                        }
+                        
+                        activities_df = pd.concat([activities_df, pd.DataFrame([new_activity])], ignore_index=True)
+                        if save_lead_activity(activities_df):
+                            st.success("Lead added successfully!")
+                            st.rerun()
+                        else:
+                            st.error("Lead added but failed to create activity. Please check activities sheet.")
+                    else:
+                        st.error("Failed to add lead. Please try again.")
     
     with tab4:
         st.subheader("Lead Timeline")
@@ -1006,19 +1188,21 @@ def leads_page():
                             activities_df = pd.concat([activities_df, pd.DataFrame([new_activity])], ignore_index=True)
                             
                             # Save to Google Sheets
-                            save_lead_activity(activities_df)
-                            
-                            # Update last contact date in leads sheet
-                            idx = leads_df[leads_df["ID"] == lead_id].index[0]
-                            leads_df.at[idx, "Last Contact"] = datetime.now().strftime("%Y-%m-%d")
-                            
-                            # Update lead score
-                            leads_df.at[idx, "Lead Score"] = calculate_lead_score(leads_df.iloc[idx], activities_df)
-                            
-                            save_leads(leads_df)
-                            
-                            st.success("Activity added successfully!")
-                            st.rerun()
+                            if save_lead_activity(activities_df):
+                                # Update last contact date in leads sheet
+                                idx = leads_df[leads_df["ID"] == lead_id].index[0]
+                                leads_df.at[idx, "Last Contact"] = datetime.now().strftime("%Y-%m-%d")
+                                
+                                # Update lead score
+                                leads_df.at[idx, "Lead Score"] = calculate_lead_score(leads_df.iloc[idx], activities_df)
+                                
+                                if save_leads(leads_df):
+                                    st.success("Activity added successfully!")
+                                    st.rerun()
+                                else:
+                                    st.error("Activity added but failed to update lead. Please check leads sheet.")
+                            else:
+                                st.error("Failed to add activity. Please try again.")
     
     with tab5:
         st.subheader("Tasks")
@@ -1068,10 +1252,11 @@ def leads_page():
                         tasks_df = pd.concat([tasks_df, pd.DataFrame([new_task])], ignore_index=True)
                         
                         # Save to Google Sheets
-                        save_tasks(tasks_df)
-                        
-                        st.success("Task added successfully!")
-                        st.rerun()
+                        if save_tasks(tasks_df):
+                            st.success("Task added successfully!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to add task. Please try again.")
             
             # Display tasks
             st.subheader("All Tasks")
@@ -1114,9 +1299,11 @@ def leads_page():
                             tasks_df.at[idx, "Status"] = new_status
                             if new_status == "Completed":
                                 tasks_df.at[idx, "Completed Date"] = datetime.now().strftime("%Y-%m-%d")
-                            save_tasks(tasks_df)
-                            st.success("Task updated successfully!")
-                            st.rerun()
+                            if save_tasks(tasks_df):
+                                st.success("Task updated successfully!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to update task. Please try again.")
     
     with tab6:
         st.subheader("Appointments")
@@ -1170,10 +1357,11 @@ def leads_page():
                         appointments_df = pd.concat([appointments_df, pd.DataFrame([new_appointment])], ignore_index=True)
                         
                         # Save to Google Sheets
-                        save_appointments(appointments_df)
-                        
-                        st.success("Appointment added successfully!")
-                        st.rerun()
+                        if save_appointments(appointments_df):
+                            st.success("Appointment added successfully!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to add appointment. Please try again.")
             
             # Display appointments
             st.subheader("All Appointments")
@@ -1214,9 +1402,11 @@ def leads_page():
                         if st.button("Update", key=f"update_{appointment['ID']}"):
                             idx = appointments_df[appointments_df["ID"] == appointment['ID']].index[0]
                             appointments_df.at[idx, "Status"] = new_status
-                            save_appointments(appointments_df)
-                            st.success("Appointment updated successfully!")
-                            st.rerun()
+                            if save_appointments(appointments_df):
+                                st.success("Appointment updated successfully!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to update appointment. Please try again.")
     
     with tab7:
         display_lead_analytics(leads_df, activities_df)
