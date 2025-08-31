@@ -8,6 +8,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import urllib.parse
 
 # Constants
 SPREADSHEET_NAME = "Al-Jazeera"
@@ -813,6 +814,42 @@ def display_lead_analytics(leads_df, activities_df):
     else:
         st.info("No activities data available.")
 
+# --- NEW: Phone number formatting for dialer ---
+def format_phone_number(phone):
+    """Format phone number for dialer link"""
+    if not phone:
+        return ""
+    
+    # Clean the phone number
+    clean_phone = re.sub(r'[^\d+]', '', str(phone))
+    
+    # Add country code if missing
+    if clean_phone.startswith('0'):
+        clean_phone = '+92' + clean_phone[1:]  # Pakistan country code
+    elif not clean_phone.startswith('+'):
+        clean_phone = '+92' + clean_phone  # Pakistan country code
+    
+    return clean_phone
+
+def create_dialer_link(phone):
+    """Create tel: link for phone number"""
+    formatted_phone = format_phone_number(phone)
+    if not formatted_phone:
+        return ""
+    
+    return f"tel:{formatted_phone}"
+
+def display_phone_with_dialer(phone):
+    """Display phone number with dialer link"""
+    if not phone:
+        return ""
+    
+    dialer_link = create_dialer_link(phone)
+    if dialer_link:
+        return f'<a href="{dialer_link}" style="color: #1f77b4; text-decoration: none;">{phone}</a>'
+    else:
+        return phone
+
 def leads_page():
     st.header("👥 Lead Management CRM")
     
@@ -961,8 +998,12 @@ def leads_page():
             if assigned_filter != "All":
                 filtered_leads = filtered_leads[filtered_leads["Assigned To"] == assigned_filter]
             
-            # Display leads table
-            st.dataframe(filtered_leads, use_container_width=True, height=300)
+            # Display leads table with phone numbers as clickable links
+            display_df = filtered_leads.copy()
+            if "Phone" in display_df.columns:
+                display_df["Phone"] = display_df["Phone"].apply(lambda x: display_phone_with_dialer(x) if pd.notna(x) else "")
+            
+            st.markdown(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
             
             # Lead actions
             if not filtered_leads.empty:
@@ -972,79 +1013,90 @@ def leads_page():
                 
                 if selected_lead:
                     lead_name = selected_lead.split(" (")[0]
-                    lead_data = filtered_leads[filtered_leads["Name"] == lead_name].iloc[0]
+                    lead_phone = selected_lead.split(" (")[1].replace(")", "")
                     
-                    with st.form("update_lead_form"):
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            status_options = ["New", "Contacted", "Follow-up", "Meeting Scheduled", 
-                                            "Negotiation", "Offer Made", "Deal Closed (Won)", "Not Interested (Lost)"]
-                            current_status = lead_data.get("Status", "New")
-                            status_index = status_options.index(current_status) if current_status in status_options else 0
-                            new_status = st.selectbox("Status", options=status_options, index=status_index)
-                            
-                            priority_options = ["Low", "Medium", "High"]
-                            current_priority = lead_data.get("Priority", "Low")
-                            priority_index = priority_options.index(current_priority) if current_priority in priority_options else 0
-                            new_priority = st.selectbox("Priority", options=priority_options, index=priority_index)
-                            
-                            # Next action date
-                            next_action_date = datetime.now().date()
-                            if lead_data.get("Next Action") and pd.notna(lead_data.get("Next Action")):
-                                try:
-                                    next_action_date = datetime.strptime(lead_data.get("Next Action"), "%Y-%m-%d").date()
-                                except:
-                                    pass
-                            new_next_action = st.date_input("Next Action", value=next_action_date)
-                            
-                            # Next action type
-                            action_type_options = ["Call", "Email", "Meeting", "Site Visit", "Follow-up"]
-                            current_action_type = lead_data.get("Next Action Type", "Call")
-                            action_type_index = action_type_options.index(current_action_type) if current_action_type in action_type_options else 0
-                            new_next_action_type = st.selectbox("Next Action Type", options=action_type_options, index=action_type_index)
+                    # FIX: Check if lead exists before accessing it
+                    lead_match = filtered_leads[(filtered_leads["Name"] == lead_name) & (filtered_leads["Phone"] == lead_phone)]
+                    if lead_match.empty:
+                        st.warning("Selected lead not found. Please select another lead.")
+                    else:
+                        lead_data = lead_match.iloc[0]
                         
-                        with col2:
-                            # Last contact date
-                            last_contact_date = datetime.now().date()
-                            if lead_data.get("Last Contact") and pd.notna(lead_data.get("Last Contact")):
-                                try:
-                                    last_contact_date = datetime.strptime(lead_data.get("Last Contact"), "%Y-%m-%d").date()
-                                except:
-                                    pass
-                            new_last_contact = st.date_input("Last Contact", value=last_contact_date)
+                        with st.form("update_lead_form"):
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                status_options = ["New", "Contacted", "Follow-up", "Meeting Scheduled", 
+                                                "Negotiation", "Offer Made", "Deal Closed (Won)", "Not Interested (Lost)"]
+                                current_status = lead_data.get("Status", "New")
+                                status_index = status_options.index(current_status) if current_status in status_options else 0
+                                new_status = st.selectbox("Status", options=status_options, index=status_index)
+                                
+                                priority_options = ["Low", "Medium", "High"]
+                                current_priority = lead_data.get("Priority", "Low")
+                                priority_index = priority_options.index(current_priority) if current_priority in priority_options else 0
+                                new_priority = st.selectbox("Priority", options=priority_options, index=priority_index)
+                                
+                                # Next action date
+                                next_action_date = datetime.now().date()
+                                if lead_data.get("Next Action") and pd.notna(lead_data.get("Next Action")):
+                                    try:
+                                        next_action_date = datetime.strptime(lead_data.get("Next Action"), "%Y-%m-%d").date()
+                                    except:
+                                        pass
+                                new_next_action = st.date_input("Next Action", value=next_action_date)
+                                
+                                # Next action type
+                                action_type_options = ["Call", "Email", "Meeting", "Site Visit", "Follow-up"]
+                                current_action_type = lead_data.get("Next Action Type", "Call")
+                                action_type_index = action_type_options.index(current_action_type) if current_action_type in action_type_options else 0
+                                new_next_action_type = st.selectbox("Next Action Type", options=action_type_options, index=action_type_index)
                             
-                            # Budget
-                            current_budget = lead_data.get("Budget", 0)
-                            if isinstance(current_budget, str) and current_budget.isdigit():
-                                current_budget = int(current_budget)
-                            elif not isinstance(current_budget, (int, float)):
-                                current_budget = 0
-                            new_budget = st.number_input("Budget (₹)", value=current_budget)
+                            with col2:
+                                # Last contact date
+                                last_contact_date = datetime.now().date()
+                                if lead_data.get("Last Contact") and pd.notna(lead_data.get("Last Contact")):
+                                    try:
+                                        last_contact_date = datetime.strptime(lead_data.get("Last Contact"), "%Y-%m-%d").date()
+                                    except:
+                                        pass
+                                new_last_contact = st.date_input("Last Contact", value=last_contact_date)
+                                
+                                # Budget
+                                current_budget = lead_data.get("Budget", 0)
+                                if isinstance(current_budget, str) and current_budget.isdigit():
+                                    current_budget = int(current_budget)
+                                elif not isinstance(current_budget, (int, float)):
+                                    current_budget = 0
+                                new_budget = st.number_input("Budget (₹)", value=current_budget)
+                                
+                                new_location = st.text_input("Location Preference", value=lead_data.get("Location Preference", ""))
+                                new_notes = st.text_area("Notes", value=lead_data.get("Notes", ""))
                             
-                            new_location = st.text_input("Location Preference", value=lead_data.get("Location Preference", ""))
-                            new_notes = st.text_area("Notes", value=lead_data.get("Notes", ""))
-                        
-                        if st.form_submit_button("Update Lead"):
-                            # Update the lead in the dataframe
-                            idx = leads_df[leads_df["Name"] == lead_name].index[0]
-                            leads_df.at[idx, "Status"] = new_status
-                            leads_df.at[idx, "Priority"] = new_priority
-                            leads_df.at[idx, "Next Action"] = new_next_action.strftime("%Y-%m-%d")
-                            leads_df.at[idx, "Next Action Type"] = new_next_action_type
-                            leads_df.at[idx, "Last Contact"] = new_last_contact.strftime("%Y-%m-%d")
-                            leads_df.at[idx, "Budget"] = new_budget
-                            leads_df.at[idx, "Location Preference"] = new_location
-                            leads_df.at[idx, "Notes"] = new_notes
-                            
-                            # Recalculate lead score
-                            leads_df.at[idx, "Lead Score"] = calculate_lead_score(leads_df.iloc[idx], activities_df)
-                            
-                            # Save to Google Sheets
-                            if save_leads(leads_df):
-                                st.success("Lead updated successfully!")
-                                st.rerun()
-                            else:
-                                st.error("Failed to update lead. Please try again.")
+                            if st.form_submit_button("Update Lead"):
+                                # Update the lead in the dataframe
+                                idx = leads_df[(leads_df["Name"] == lead_name) & (leads_df["Phone"] == lead_phone)].index
+                                if len(idx) > 0:
+                                    idx = idx[0]
+                                    leads_df.at[idx, "Status"] = new_status
+                                    leads_df.at[idx, "Priority"] = new_priority
+                                    leads_df.at[idx, "Next Action"] = new_next_action.strftime("%Y-%m-%d")
+                                    leads_df.at[idx, "Next Action Type"] = new_next_action_type
+                                    leads_df.at[idx, "Last Contact"] = new_last_contact.strftime("%Y-%m-%d")
+                                    leads_df.at[idx, "Budget"] = new_budget
+                                    leads_df.at[idx, "Location Preference"] = new_location
+                                    leads_df.at[idx, "Notes"] = new_notes
+                                    
+                                    # Recalculate lead score
+                                    leads_df.at[idx, "Lead Score"] = calculate_lead_score(leads_df.iloc[idx], activities_df)
+                                    
+                                    # Save to Google Sheets
+                                    if save_leads(leads_df):
+                                        st.success("Lead updated successfully!")
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to update lead. Please try again.")
+                                else:
+                                    st.error("Lead not found in database. Please try again.")
     
     with tab3:
         st.subheader("Add New Lead")
@@ -1142,67 +1194,77 @@ def leads_page():
             if selected_lead:
                 lead_name = selected_lead.split(" (")[0]
                 lead_phone = selected_lead.split(" (")[1].replace(")", "")
-                lead_data = leads_df[(leads_df["Name"] == lead_name) & (leads_df["Phone"] == lead_phone)].iloc[0]
-                lead_id = lead_data["ID"]
                 
-                # Display timeline
-                display_lead_timeline(lead_id, lead_name, lead_phone)
-                
-                # Add new activity
-                st.subheader("Add New Activity")
-                
-                with st.form("add_activity_form"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        activity_type = st.selectbox("Activity Type", 
-                                                   options=["Call", "Meeting", "Email", "WhatsApp", "Site Visit", "Status Update", "Note"])
-                        follow_up_date = st.date_input("Follow-up Date", value=datetime.now().date() + timedelta(days=7))
-                        duration = st.number_input("Duration (minutes)", min_value=0, value=15)
-                    with col2:
-                        next_steps = st.text_input("Next Steps", placeholder="What needs to happen next?")
-                        outcome = st.selectbox("Outcome", 
-                                             options=["Positive", "Neutral", "Negative", "Not Responded", "Scheduled", "Completed"])
+                # FIX: Check if lead exists before accessing it
+                lead_match = leads_df[(leads_df["Name"] == lead_name) & (leads_df["Phone"] == lead_phone)]
+                if lead_match.empty:
+                    st.warning("Selected lead not found. Please select another lead.")
+                else:
+                    lead_data = lead_match.iloc[0]
+                    lead_id = lead_data["ID"]
                     
-                    details = st.text_area("Details*", placeholder="What was discussed?")
+                    # Display timeline
+                    display_lead_timeline(lead_id, lead_name, lead_phone)
                     
-                    if st.form_submit_button("Add Activity"):
-                        if not details:
-                            st.error("Details are required!")
-                        else:
-                            # Create new activity
-                            new_activity = {
-                                "ID": generate_activity_id(),
-                                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                "Lead ID": lead_id,
-                                "Lead Name": lead_name,
-                                "Lead Phone": lead_phone,
-                                "Activity Type": activity_type,
-                                "Details": details,
-                                "Next Steps": next_steps,
-                                "Follow-up Date": follow_up_date.strftime("%Y-%m-%d"),
-                                "Duration": str(duration),
-                                "Outcome": outcome
-                            }
-                            
-                            # Add to dataframe
-                            activities_df = pd.concat([activities_df, pd.DataFrame([new_activity])], ignore_index=True)
-                            
-                            # Save to Google Sheets
-                            if save_lead_activity(activities_df):
-                                # Update last contact date in leads sheet
-                                idx = leads_df[leads_df["ID"] == lead_id].index[0]
-                                leads_df.at[idx, "Last Contact"] = datetime.now().strftime("%Y-%m-%d")
-                                
-                                # Update lead score
-                                leads_df.at[idx, "Lead Score"] = calculate_lead_score(leads_df.iloc[idx], activities_df)
-                                
-                                if save_leads(leads_df):
-                                    st.success("Activity added successfully!")
-                                    st.rerun()
-                                else:
-                                    st.error("Activity added but failed to update lead. Please check leads sheet.")
+                    # Add new activity
+                    st.subheader("Add New Activity")
+                    
+                    with st.form("add_activity_form"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            activity_type = st.selectbox("Activity Type", 
+                                                       options=["Call", "Meeting", "Email", "WhatsApp", "Site Visit", "Status Update", "Note"])
+                            follow_up_date = st.date_input("Follow-up Date", value=datetime.now().date() + timedelta(days=7))
+                            duration = st.number_input("Duration (minutes)", min_value=0, value=15)
+                        with col2:
+                            next_steps = st.text_input("Next Steps", placeholder="What needs to happen next?")
+                            outcome = st.selectbox("Outcome", 
+                                                 options=["Positive", "Neutral", "Negative", "Not Responded", "Scheduled", "Completed"])
+                        
+                        details = st.text_area("Details*", placeholder="What was discussed?")
+                        
+                        if st.form_submit_button("Add Activity"):
+                            if not details:
+                                st.error("Details are required!")
                             else:
-                                st.error("Failed to add activity. Please try again.")
+                                # Create new activity
+                                new_activity = {
+                                    "ID": generate_activity_id(),
+                                    "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                    "Lead ID": lead_id,
+                                    "Lead Name": lead_name,
+                                    "Lead Phone": lead_phone,
+                                    "Activity Type": activity_type,
+                                    "Details": details,
+                                    "Next Steps": next_steps,
+                                    "Follow-up Date": follow_up_date.strftime("%Y-%m-%d"),
+                                    "Duration": str(duration),
+                                    "Outcome": outcome
+                                }
+                                
+                                # Add to dataframe
+                                activities_df = pd.concat([activities_df, pd.DataFrame([new_activity])], ignore_index=True)
+                                
+                                # Save to Google Sheets
+                                if save_lead_activity(activities_df):
+                                    # Update last contact date in leads sheet
+                                    idx = leads_df[leads_df["ID"] == lead_id].index
+                                    if len(idx) > 0:
+                                        idx = idx[0]
+                                        leads_df.at[idx, "Last Contact"] = datetime.now().strftime("%Y-%m-%d")
+                                        
+                                        # Update lead score
+                                        leads_df.at[idx, "Lead Score"] = calculate_lead_score(leads_df.iloc[idx], activities_df)
+                                        
+                                        if save_leads(leads_df):
+                                            st.success("Activity added successfully!")
+                                            st.rerun()
+                                        else:
+                                            st.error("Activity added but failed to update lead. Please check leads sheet.")
+                                    else:
+                                        st.error("Lead not found in database. Please try again.")
+                                else:
+                                    st.error("Failed to add activity. Please try again.")
     
     with tab5:
         st.subheader("Tasks")
@@ -1295,15 +1357,19 @@ def leads_page():
                                                 key=f"status_{task['ID']}")
                         
                         if st.button("Update", key=f"update_{task['ID']}"):
-                            idx = tasks_df[tasks_df["ID"] == task['ID']].index[0]
-                            tasks_df.at[idx, "Status"] = new_status
-                            if new_status == "Completed":
-                                tasks_df.at[idx, "Completed Date"] = datetime.now().strftime("%Y-%m-%d")
-                            if save_tasks(tasks_df):
-                                st.success("Task updated successfully!")
-                                st.rerun()
+                            idx = tasks_df[tasks_df["ID"] == task['ID']].index
+                            if len(idx) > 0:
+                                idx = idx[0]
+                                tasks_df.at[idx, "Status"] = new_status
+                                if new_status == "Completed":
+                                    tasks_df.at[idx, "Completed Date"] = datetime.now().strftime("%Y-%m-%d")
+                                if save_tasks(tasks_df):
+                                    st.success("Task updated successfully!")
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to update task. Please try again.")
                             else:
-                                st.error("Failed to update task. Please try again.")
+                                st.error("Task not found in database. Please try again.")
     
     with tab6:
         st.subheader("Appointments")
@@ -1400,13 +1466,17 @@ def leads_page():
                                                 key=f"status_{appointment['ID']}")
                         
                         if st.button("Update", key=f"update_{appointment['ID']}"):
-                            idx = appointments_df[appointments_df["ID"] == appointment['ID']].index[0]
-                            appointments_df.at[idx, "Status"] = new_status
-                            if save_appointments(appointments_df):
-                                st.success("Appointment updated successfully!")
-                                st.rerun()
+                            idx = appointments_df[appointments_df["ID"] == appointment['ID']].index
+                            if len(idx) > 0:
+                                idx = idx[0]
+                                appointments_df.at[idx, "Status"] = new_status
+                                if save_appointments(appointments_df):
+                                    st.success("Appointment updated successfully!")
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to update appointment. Please try again.")
                             else:
-                                st.error("Failed to update appointment. Please try again.")
+                                st.error("Appointment not found in database. Please try again.")
     
     with tab7:
         display_lead_analytics(leads_df, activities_df)
