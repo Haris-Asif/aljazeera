@@ -20,9 +20,7 @@ TASKS_SHEET = "Tasks"
 APPOINTMENTS_SHEET = "Appointments"
 
 # Streamlit setup
-st.set_page_config(page_title="Al-Jazeera Real Estate CRM", layout="wide")
-
-# --- Helpers ---
+st.set_page_config(page_title="Al-Jazeera Real Estate CRM", layout="wide")# --- Helpers ---
 def clean_number(num):
     return re.sub(r"[^\d]", "", str(num or ""))
 
@@ -54,7 +52,24 @@ def fuzzy_feature_match(row_features, selected_features):
             return True
     return False
 
-# Google Sheets
+def sector_matches(f, c):
+    if not f:
+        return True
+    f = f.replace(" ", "").upper()
+    c = str(c).replace(" ", "").upper()
+    return f in c if "/" not in f else f == c
+
+def safe_dataframe(df):
+    try:
+        df = df.copy()
+        df = df.drop(columns=["ParsedDate", "ParsedPrice"], errors="ignore")
+        for col in df.columns:
+            if df[col].dtype == "object":
+                df[col] = df[col].astype(str)
+        return df
+    except Exception as e:
+        st.error(f"⚠️ Error displaying table: {e}")
+        return pd.DataFrame()# Google Sheets
 def get_gsheet_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = st.secrets["gcp_service_account"]
@@ -398,28 +413,7 @@ def build_name_map(df):
     for i, name in enumerate(sorted(name_set.keys()), 1):
         numbered_dealers.append(f"{i}. {name}")
     
-    return numbered_dealers, merged
-
-def sector_matches(f, c):
-    if not f:
-        return True
-    f = f.replace(" ", "").upper()
-    c = str(c).replace(" ", "").upper()
-    return f in c if "/" not in f else f == c
-
-def safe_dataframe(df):
-    try:
-        df = df.copy()
-        df = df.drop(columns=["ParsedDate", "ParsedPrice"], errors="ignore")
-        for col in df.columns:
-            if df[col].dtype == "object":
-                df[col] = df[col].astype(str)
-        return df
-    except Exception as e:
-        st.error(f"⚠️ Error displaying table: {e}")
-        return pd.DataFrame()
-
-# ---------- WhatsApp utilities (split + encode aware) ----------
+    return numbered_dealers, merged# ---------- WhatsApp utilities (split + encode aware) ----------
 def _extract_int(val):
     """Extract first integer from a string; used for numeric sorting of Plot No."""
     try:
@@ -448,7 +442,7 @@ def _split_blocks_for_limits(blocks, plain_limit=3000, encoded_limit=1800):
                 small = ""
                 for ln in lines:
                     cand2 = small + ln
-                    if len(cand2) > plain_limit or len(_url_encode_for_whatsapp(cand2)) > encoded_limit:
+                    if len(candidate) > plain_limit or len(_url_encode_for_whatsapp(candidate)) > encoded_limit:
                         if small:
                             chunks.append(small.rstrip())
                             small = ""
@@ -594,9 +588,7 @@ def create_duplicates_view(df):
         return [f"background-color: {color_map[row['GroupKey']]}"] * len(row)
     
     styled_df = duplicate_df.style.apply(apply_row_color, axis=1)
-    return styled_df, duplicate_df
-
-# --- NEW: Enhanced Lead Management Functions ---
+    return styled_df, duplicate_df# --- Enhanced Lead Management Functions ---
 def generate_lead_id():
     return f"L{int(datetime.now().timestamp())}"
 
@@ -639,9 +631,9 @@ def calculate_lead_score(lead_data, activities_df):
         if budget > 5000000:  # Above 50 lakhs
             score += 20
         elif budget > 2000000:  # Above 20 lakhs
-        score += 10
+            score += 10
     
-return min(score, 100)  # Cap at 100
+    return min(score, 100)  # Cap at 100
 
 def display_lead_timeline(lead_id, lead_name, lead_phone):
     st.subheader(f"📋 Timeline for: {lead_name}")
@@ -732,7 +724,6 @@ def display_lead_analytics(leads_df, activities_df):
         if "Status" in leads_df.columns:
             status_counts = leads_df["Status"].value_counts()
             if not status_counts.empty:
-                # Create a DataFrame for Plotly
                 status_df = pd.DataFrame({
                     'Status': status_counts.index,
                     'Count': status_counts.values
@@ -749,13 +740,12 @@ def display_lead_analytics(leads_df, activities_df):
         if "Source" in leads_df.columns:
             source_counts = leads_df["Source"].value_counts()
             if not source_counts.empty:
-                # Create a DataFrame for Plotly
                 source_df = pd.DataFrame({
                     'Source': source_counts.index,
                     'Count': source_counts.values
                 })
                 fig_source = px.bar(source_df, x='Count', y='Source', orientation='h',
-                                  title="Leads by Source", labels={'Count':'Count', 'Source':'Source'})
+                                  title="Leads by Source")
                 st.plotly_chart(fig_source, use_container_width=True)
             else:
                 st.info("No source data available.")
@@ -812,9 +802,7 @@ def display_lead_analytics(leads_df, activities_df):
         except:
             st.info("No activities data available.")
     else:
-        st.info("No activities data available.")
-
-# --- Phone number formatting for dialer ---
+        st.info("No activities data available.")# --- Phone number formatting for dialer ---
 def format_phone_number(phone):
     """Format phone number for dialer link"""
     if not phone:
@@ -865,9 +853,7 @@ def format_contact_column(contact_str):
         else:
             formatted_numbers.append(num)
     
-    return ", ".join(formatted_numbers)
-
-def leads_page():
+    return ", ".join(formatted_numbers)def leads_page():
     st.header("👥 Lead Management CRM")
     
     # Load data
@@ -970,13 +956,11 @@ def leads_page():
         if not leads_df.empty and "Status" in leads_df.columns:
             status_chart_data = leads_df["Status"].value_counts()
             if not status_chart_data.empty:
-                # Create a DataFrame for the chart
                 status_df = pd.DataFrame({
                     'Status': status_chart_data.index,
                     'Count': status_chart_data.values
                 })
-                fig = px.bar(status_df, x='Status', y='Count', 
-                            labels={'Count': 'Count', 'Status': 'Status'}, title="Leads by Status")
+                fig = px.bar(status_df, x='Status', y='Count', title="Leads by Status")
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("No status data available.")
@@ -1497,9 +1481,7 @@ def leads_page():
                                 st.error("Appointment not found in database. Please try again.")
     
     with tab7:
-        display_lead_analytics(leads_df, activities_df)
-
-# --- Plots Page (Updated with direct dialing) ---
+        display_lead_analytics(leads_df, activities_df)# --- Plots Page (Updated with direct dialing) ---
 def plots_page():
     st.header("🏡 Property Listings")
     
@@ -1524,7 +1506,7 @@ def plots_page():
         # Property Type filter
         prop_type_options = ["All"]
         if "Property Type" in df.columns:
-            prop_type_options += sorted([str(v).strip() for v in df["Property Type"].dropna().ast(str).unique()])
+            prop_type_options += sorted([str(v).strip() for v in df["Property Type"].dropna().astype(str).unique()])
         selected_prop_type = st.selectbox("Property Type", prop_type_options)
 
         dealer_names, contact_to_name = build_name_map(df)
@@ -1787,9 +1769,7 @@ def plots_page():
                 encoded = msg.replace(" ", "%20").replace("\n", "%0A")
                 link = f"https://wa.me/{wa_number}?text={encoded}"
                 st.markdown(f"[📩 Send Message {i+1}]({link})", unsafe_allow_html=True)
-                st.markdown("---")
-
-# --- Main App ---
+                st.markdown("---")# --- Main App ---
 def main():
     st.title("🏡 Al-Jazeera Real Estate CRM")
     
