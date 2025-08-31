@@ -853,7 +853,9 @@ def format_contact_column(contact_str):
         else:
             formatted_numbers.append(num)
     
-    return ", ".join(formatted_numbers)def leads_page():
+    return ", ".join(formatted_numbers)
+    
+    def leads_page():
     st.header("👥 Lead Management CRM")
     
     # Load data
