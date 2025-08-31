@@ -10,7 +10,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 SPREADSHEET_NAME = "Al-Jazeera"
 PLOTS_SHEET = "Plots"
 CONTACTS_SHEET = "Contacts"
-LEADS_SHEET = "Leads"  # New sheet for lead management
+LEADS_SHEET = "Leads"
+ACTIVITIES_SHEET = "LeadActivities"  # New sheet for tracking lead activities
 
 # Streamlit setup
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
@@ -64,7 +65,6 @@ def load_contacts():
     sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
     return pd.DataFrame(sheet.get_all_records())
 
-# NEW: Load leads data
 def load_leads():
     try:
         sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(LEADS_SHEET)
@@ -93,7 +93,54 @@ def load_leads():
             "Notes", "Assigned To"
         ])
 
-# NEW: Save leads data
+# NEW: Load lead activities
+def load_lead_activities():
+    try:
+        sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(ACTIVITIES_SHEET)
+        df = pd.DataFrame(sheet.get_all_records())
+        if df.empty:
+            # Initialize with empty dataframe with proper columns
+            df = pd.DataFrame(columns=[
+                "Timestamp", "Lead Name", "Lead Phone", "Activity Type", 
+                "Details", "Next Steps", "Follow-up Date"
+            ])
+        return df
+    except gspread.exceptions.WorksheetNotFound:
+        # Create the worksheet if it doesn't exist
+        sheet = get_gsheet_client().open(SPREADSHEET_NAME)
+        worksheet = sheet.add_worksheet(title=ACTIVITIES_SHEET, rows=100, cols=7)
+        # Add headers
+        worksheet.append_row([
+            "Timestamp", "Lead Name", "Lead Phone", "Activity Type", 
+            "Details", "Next Steps", "Follow-up Date"
+        ])
+        return pd.DataFrame(columns=[
+            "Timestamp", "Lead Name", "Lead Phone", "Activity Type", 
+            "Details", "Next Steps", "Follow-up Date"
+        ])
+
+# NEW: Save lead activity
+def save_lead_activity(activity_df):
+    sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(ACTIVITIES_SHEET)
+    # Clear existing data
+    sheet.clear()
+    # Add headers
+    sheet.append_row([
+        "Timestamp", "Lead Name", "Lead Phone", "Activity Type", 
+        "Details", "Next Steps", "Follow-up Date"
+    ])
+    # Add data
+    for _, row in activity_df.iterrows():
+        sheet.append_row([
+            row.get("Timestamp", ""),
+            row.get("Lead Name", ""),
+            row.get("Lead Phone", ""),
+            row.get("Activity Type", ""),
+            row.get("Details", ""),
+            row.get("Next Steps", ""),
+            row.get("Follow-up Date", "")
+        ])
+
 def save_leads(df):
     sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(LEADS_SHEET)
     # Clear existing data
@@ -167,7 +214,7 @@ def sector_matches(f, c):
     if not f:
         return True
     f = f.replace(" ", "").upper()
-    c = str(c).replace(" ", "").upper()
+    c = str(c).replace(" ", "").upper())
     return f in c if "/" not in f else f == c
 
 def safe_dataframe(df):
@@ -380,6 +427,83 @@ def create_duplicates_view(df):
     styled_df = duplicate_df.style.apply(apply_row_color, axis=1)
     return styled_df, duplicate_df
 
+# --- NEW: Lead Timeline Functions ---
+def display_lead_timeline(lead_name, lead_phone):
+    st.subheader(f"Timeline for: {lead_name}")
+    
+    # Load activities
+    activities_df = load_lead_activities()
+    
+    # Filter activities for this lead
+    lead_activities = activities_df[
+        (activities_df["Lead Name"] == lead_name) & 
+        (activities_df["Lead Phone"] == lead_phone)
+    ]
+    
+    if lead_activities.empty:
+        st.info("No activities recorded for this lead yet.")
+        return
+    
+    # Sort by timestamp (newest first)
+    lead_activities = lead_activities.sort_values("Timestamp", ascending=False)
+    
+    # Display timeline
+    for _, activity in lead_activities.iterrows():
+        with st.container():
+            col1, col2 = st.columns([1, 4])
+            
+            with col1:
+                timestamp = activity["Timestamp"]
+                if isinstance(timestamp, str):
+                    try:
+                        timestamp = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+                    except:
+                        pass
+                
+                if isinstance(timestamp, datetime):
+                    st.write(timestamp.strftime("%b %d, %Y"))
+                    st.write(timestamp.strftime("%I:%M %p"))
+                else:
+                    st.write(str(timestamp))
+            
+            with col2:
+                activity_type = activity["Activity Type"]
+                
+                # Color code based on activity type
+                if activity_type == "Call":
+                    st.markdown(f"**📞 Phone Call**")
+                    color = "#E3F2FD"
+                elif activity_type == "Meeting":
+                    st.markdown(f"**👥 Meeting**")
+                    color = "#E8F5E9"
+                elif activity_type == "Email":
+                    st.markdown(f"**📧 Email**")
+                    color = "#FFF3E0"
+                elif activity_type == "WhatsApp":
+                    st.markdown(f"**💬 WhatsApp**")
+                    color = "#E8F5E9"
+                elif activity_type == "Status Update":
+                    st.markdown(f"**🔄 Status Update**")
+                    color = "#F3E5F5"
+                else:
+                    st.markdown(f"**📝 Note**")
+                    color = "#F5F5F5"
+                
+                st.markdown(
+                    f"""<div style="background-color: {color}; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
+                    <p>{activity['Details']}</p>
+                    </div>""", 
+                    unsafe_allow_html=True
+                )
+                
+                if activity["Next Steps"] and pd.notna(activity["Next Steps"]):
+                    st.markdown(f"**Next Steps:** {activity['Next Steps']}")
+                
+                if activity["Follow-up Date"] and pd.notna(activity["Follow-up Date"]):
+                    st.markdown(f"**Follow-up:** {activity['Follow-up Date']}")
+            
+            st.markdown("---")
+
 # --- NEW: Lead Management Functions ---
 def leads_page():
     st.header("👥 Lead Management")
@@ -424,7 +548,7 @@ def leads_page():
         st.warning(f"⚠️ You have {overdue_actions} overdue follow-up actions. Check the 'Next Action' column.")
     
     # Tabs for different views
-    tab1, tab2, tab3 = st.tabs(["All Leads", "Add New Lead", "Reports"])
+    tab1, tab2, tab3, tab4 = st.tabs(["All Leads", "Add New Lead", "Lead Timeline", "Reports"])
     
     with tab1:
         st.subheader("All Leads")
@@ -460,7 +584,7 @@ def leads_page():
             if not filtered_leads.empty:
                 st.subheader("Update Lead")
                 lead_names = filtered_leads["Name"].tolist()
-                selected_lead = st.selectbox("Select Lead to Update", options=lead_names)
+                selected_lead = st.selectbox("Select Lead to Update", options=lead_names, key="update_lead_select")
                 
                 if selected_lead:
                     lead_data = filtered_leads[filtered_leads["Name"] == selected_lead].iloc[0]
@@ -552,6 +676,69 @@ def leads_page():
                     st.rerun()
     
     with tab3:
+        st.subheader("Lead Timeline")
+        
+        if leads_df.empty:
+            st.info("No leads found. Add your first lead in the 'Add New Lead' tab.")
+        else:
+            # Select lead to view timeline
+            lead_names = leads_df["Name"].tolist()
+            selected_lead = st.selectbox("Select Lead", options=lead_names, key="timeline_lead_select")
+            
+            if selected_lead:
+                lead_data = leads_df[leads_df["Name"] == selected_lead].iloc[0]
+                lead_phone = lead_data["Phone"]
+                
+                # Display timeline
+                display_lead_timeline(selected_lead, lead_phone)
+                
+                # Add new activity
+                st.subheader("Add New Activity")
+                
+                with st.form("add_activity_form"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        activity_type = st.selectbox("Activity Type", 
+                                                   options=["Call", "Meeting", "Email", "WhatsApp", "Status Update", "Note"])
+                        follow_up_date = st.date_input("Follow-up Date", value=datetime.now().date() + timedelta(days=7))
+                    with col2:
+                        next_steps = st.text_input("Next Steps", placeholder="What needs to happen next?")
+                    
+                    details = st.text_area("Details*", placeholder="What was discussed?")
+                    
+                    if st.form_submit_button("Add Activity"):
+                        if not details:
+                            st.error("Details are required!")
+                        else:
+                            # Load existing activities
+                            activities_df = load_lead_activities()
+                            
+                            # Create new activity
+                            new_activity = {
+                                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "Lead Name": selected_lead,
+                                "Lead Phone": lead_phone,
+                                "Activity Type": activity_type,
+                                "Details": details,
+                                "Next Steps": next_steps,
+                                "Follow-up Date": follow_up_date.strftime("%Y-%m-%d")
+                            }
+                            
+                            # Add to dataframe
+                            activities_df = pd.concat([activities_df, pd.DataFrame([new_activity])], ignore_index=True)
+                            
+                            # Save to Google Sheets
+                            save_lead_activity(activities_df)
+                            
+                            # Update last contact date in leads sheet
+                            idx = leads_df[leads_df["Name"] == selected_lead].index[0]
+                            leads_df.at[idx, "Last Contact"] = datetime.now().strftime("%Y-%m-%d")
+                            save_leads(leads_df)
+                            
+                            st.success("Activity added successfully!")
+                            st.rerun()
+    
+    with tab4:
         st.subheader("Lead Reports")
         
         if leads_df.empty:
