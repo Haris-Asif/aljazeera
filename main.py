@@ -641,7 +641,7 @@ def calculate_lead_score(lead_data, activities_df):
         elif budget > 2000000:  # Above 20 lakhs
         score += 10
     
-    return min(score, 100)  # Cap at 100
+return min(score, 100)  # Cap at 100
 
 def display_lead_timeline(lead_id, lead_name, lead_phone):
     st.subheader(f"📋 Timeline for: {lead_name}")
