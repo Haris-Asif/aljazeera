@@ -378,10 +378,17 @@ def main():
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
     if plot_size_filter:
         df_filtered = df_filtered[df_filtered["Plot Size"].str.contains(plot_size_filter, case=False, na=False)]
+    
+    # Enhanced Street No filter - match exact or partial matches
     if street_filter:
-        df_filtered = df_filtered[df_filtered["Street No"].str.contains(street_filter, case=False, na=False)]
+        street_pattern = re.compile(re.escape(street_filter), re.IGNORECASE)
+        df_filtered = df_filtered[df_filtered["Street No"].apply(lambda x: bool(street_pattern.search(str(x))))]
+    
+    # Enhanced Plot No filter - match exact or partial matches
     if plot_no_filter:
-        df_filtered = df_filtered[df_filtered["Plot No"].str.contains(plot_no_filter, case=False, na=False)]
+        plot_pattern = re.compile(re.escape(plot_no_filter), re.IGNORECASE)
+        df_filtered = df_filtered[df_filtered["Plot No"].apply(lambda x: bool(plot_pattern.search(str(x))))]
+    
     if contact_filter:
         cnum = clean_number(contact_filter)
         df_filtered = df_filtered[df_filtered["Extracted Contact"].astype(str).apply(
