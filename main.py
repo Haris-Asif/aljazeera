@@ -5,10 +5,10 @@ import re
 import difflib
 from datetime import datetime, timedelta
 from oauth2client.service_account import ServiceAccountCredentials
-import vobject  # For VCF file parsing
 import tempfile
 import os
 import numpy as np
+import chardet  # For encoding detection
 
 # Constants
 SPREADSHEET_NAME = "Al-Jazeera"
@@ -203,7 +203,7 @@ def sector_matches(f, c):
     if not f:
         return True
     f = f.replace(" ", "").upper()
-    c = str(c).replace(" ", "").upper()
+    c = str(c).replace(" ", "").upper())
     return f in c if "/" not in f else f == c
 
 def safe_dataframe(df):
@@ -442,50 +442,62 @@ def format_phone_link(phone):
     else:
         return cleaned
 
-# Parse VCF file
+# Parse VCF file with better encoding handling
 def parse_vcf_file(vcf_file):
     contacts = []
+    
     try:
-        # Read the uploaded file
-        content = vcf_file.getvalue().decode("utf-8")
+        # Read the file content
+        content = vcf_file.getvalue()
         
-        # Parse vCard content
-        vcards = vobject.readComponents(content)
+        # Try to detect encoding
+        detected = chardet.detect(content)
+        encoding = detected.get('encoding', 'utf-8')
         
-        for vcard in vcards:
-            try:
-                name = ""
-                if hasattr(vcard, 'fn') and vcard.fn.value:
-                    name = vcard.fn.value
-                
-                phones = []
-                if hasattr(vcard, 'tel'):
-                    if isinstance(vcard.tel, list):
-                        for tel in vcard.tel:
-                            phones.append(tel.value)
-                    else:
-                        phones.append(vcard.tel.value)
-                
-                email = ""
-                if hasattr(vcard, 'email'):
-                    if isinstance(vcard.email, list):
-                        email = vcard.email[0].value if vcard.email else ""
-                    else:
-                        email = vcard.email.value
-                
-                # Add contact if we have at least a name or phone number
-                if name or phones:
-                    contacts.append({
-                        "Name": name,
-                        "Contact1": phones[0] if phones else "",
-                        "Contact2": phones[1] if len(phones) > 1 else "",
-                        "Contact3": phones[2] if len(phones) > 2 else "",
-                        "Email": email,
-                        "Address": ""  # VCF typically doesn't have address in a simple field
-                    })
-            except Exception as e:
-                st.warning(f"Could not parse one contact: {e}")
+        # Try to decode with detected encoding, fallback to latin-1 if needed
+        try:
+            text_content = content.decode(encoding)
+        except UnicodeDecodeError:
+            text_content = content.decode('latin-1')
+        
+        # Split into individual vCards
+        vcard_texts = text_content.split('END:VCARD')
+        
+        for vcard_text in vcard_texts:
+            if not vcard_text.strip():
                 continue
+                
+            # Add the END:VCARD back for parsing
+            vcard_text = vcard_text.strip() + 'END:VCARD'
+            
+            # Parse individual fields
+            name = ""
+            phone = ""
+            
+            # Extract FN field (Full Name)
+            fn_match = re.search(r'FN:(.*?)(?:\n|$)', vcard_text, re.IGNORECASE)
+            if fn_match:
+                name = fn_match.group(1).strip()
+            
+            # Extract TEL;CELL field (Phone Number)
+            tel_match = re.search(r'TEL;CELL:(.*?)(?:\n|$)', vcard_text, re.IGNORECASE)
+            if not tel_match:
+                # Fallback to any TEL field
+                tel_match = re.search(r'TEL[^:]*:(.*?)(?:\n|$)', vcard_text, re.IGNORECASE)
+            
+            if tel_match:
+                phone = tel_match.group(1).strip()
+            
+            # Only add if we have at least a name or phone
+            if name or phone:
+                contacts.append({
+                    "Name": name,
+                    "Contact1": phone,
+                    "Contact2": "",
+                    "Contact3": "",
+                    "Email": "",
+                    "Address": ""
+                })
                 
     except Exception as e:
         st.error(f"Error parsing VCF file: {e}")
