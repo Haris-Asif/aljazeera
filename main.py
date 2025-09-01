@@ -4,7 +4,7 @@ import gspread
 import re
 import difflib
 from datetime import datetime, timedelta
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2 import service_account
 from collections import defaultdict
 import unicodedata
 
@@ -88,22 +88,37 @@ def fuzzy_feature_match(row_features, selected_features):
     return False
 
 # Google Sheets
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_resource
 def get_gsheet_client():
-    """Authenticate with Google Sheets API"""
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds_dict = st.secrets["gcp_service_account"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    return gspread.authorize(creds)
+    """Authenticate with Google Sheets API using service account"""
+    try:
+        # Create a credentials object from the service account info
+        creds_dict = st.secrets["gcp_service_account"]
+        credentials = service_account.Credentials.from_service_account_info(
+            creds_dict,
+            scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        )
+        return gspread.authorize(credentials)
+    except Exception as e:
+        st.error(f"Authentication error: {e}")
+        return None
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_plot_data():
     """Load plot data from Google Sheets"""
     try:
-        sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
+        client = get_gsheet_client()
+        if client is None:
+            return pd.DataFrame()
+            
+        sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
         df = pd.DataFrame(sheet.get_all_records())
+        
+        if df.empty:
+            return df
+            
         df["SheetRowNum"] = [i + 2 for i in range(len(df))]  # Start from row 2
-        return df
+        return df.fillna("")
     except Exception as e:
         st.error(f"Error loading plot data: {e}")
         return pd.DataFrame()
@@ -112,8 +127,13 @@ def load_plot_data():
 def load_contacts():
     """Load contacts data from Google Sheets"""
     try:
-        sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
-        return pd.DataFrame(sheet.get_all_records())
+        client = get_gsheet_client()
+        if client is None:
+            return pd.DataFrame()
+            
+        sheet = client.open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
+        df = pd.DataFrame(sheet.get_all_records())
+        return df.fillna("")
     except Exception as e:
         st.error(f"Error loading contacts: {e}")
         return pd.DataFrame()
@@ -140,7 +160,7 @@ def filter_by_date(df, label):
 
 def build_name_map(df):
     """Build mapping of dealer names to contact numbers with fuzzy matching"""
-    if df.empty:
+    if df.empty or "Extracted Name" not in df.columns or "Extracted Contact" not in df.columns:
         return [], {}
     
     # Collect all name-contact pairs
@@ -359,6 +379,9 @@ def delete_rows_from_sheet(row_numbers):
     """Delete rows from Google Sheet"""
     try:
         client = get_gsheet_client()
+        if client is None:
+            return False
+            
         sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
         
         valid_rows = [row_num for row_num in row_numbers if row_num > 1]
@@ -425,15 +448,15 @@ def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
 
     # Load data
-    df = load_plot_data().fillna("")
+    df = load_plot_data()
     contacts_df = load_contacts()
 
     # Get all unique features and property types
-    all_features = get_all_unique_features(df)
+    all_features = get_all_unique_features(df) if not df.empty else []
     
     # Get property types from the sheet
     prop_type_options = ["All"]
-    if "Property Type" in df.columns:
+    if not df.empty and "Property Type" in df.columns:
         prop_types = [str(v).strip() for v in df["Property Type"].dropna().astype(str).unique() if v]
         prop_type_options.extend(sorted(prop_types))
 
@@ -457,8 +480,10 @@ def main():
         dealer_names, contact_to_name = build_name_map(df)
         selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names)
 
-        # Get contact names
-        contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
+        # Get contact names from contacts sheet
+        contact_names = [""]
+        if not contacts_df.empty and "Name" in contacts_df.columns:
+            contact_names += sorted(contacts_df["Name"].dropna().unique())
         selected_saved = st.selectbox("📇 Saved Contact (by number)", contact_names)
 
     # Start with all data
@@ -475,14 +500,15 @@ def main():
             lambda x: any(c in clean_number(x) for c in selected_contacts))]
 
     if selected_saved:
-        row = contacts_df[contacts_df["Name"] == selected_saved].iloc[0] if not contacts_df[contacts_df["Name"] == selected_saved].empty else None
-        selected_contacts = []
-        if row is not None:
-            for col in ["Contact1", "Contact2", "Contact3"]:
-                if col in row and pd.notna(row[col]):
-                    selected_contacts.extend(extract_numbers(row[col]))
-        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
-            lambda x: any(n in clean_number(x) for n in selected_contacts))]
+        if not contacts_df.empty and "Name" in contacts_df.columns:
+            row = contacts_df[contacts_df["Name"] == selected_saved].iloc[0] if not contacts_df[contacts_df["Name"] == selected_saved].empty else None
+            selected_contacts = []
+            if row is not None:
+                for col in ["Contact1", "Contact2", "Contact3"]:
+                    if col in row and pd.notna(row[col]):
+                        selected_contacts.extend(extract_numbers(row[col]))
+            df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
+                lambda x: any(n in clean_number(x) for n in selected_contacts))]
 
     if sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
@@ -679,14 +705,15 @@ def main():
         if manual_number:
             cleaned = clean_number(manual_number)
         elif selected_name_whatsapp:
-            contact_row = contacts_df[contacts_df["Name"] == selected_name_whatsapp]
-            if not contact_row.empty:
-                row = contact_row.iloc[0]
-                numbers = []
-                for col in ["Contact1", "Contact2", "Contact3"]:
-                    if col in row and pd.notna(row[col]):
-                        numbers.append(clean_number(row[col]))
-                cleaned = numbers[0] if numbers else ""
+            if not contacts_df.empty and "Name" in contacts_df.columns:
+                contact_row = contacts_df[contacts_df["Name"] == selected_name_whatsapp]
+                if not contact_row.empty:
+                    row = contact_row.iloc[0]
+                    numbers = []
+                    for col in ["Contact1", "Contact2", "Contact3"]:
+                        if col in row and pd.notna(row[col]):
+                            numbers.append(clean_number(row[col]))
+                    cleaned = numbers[0] if numbers else ""
 
         if not cleaned:
             st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
