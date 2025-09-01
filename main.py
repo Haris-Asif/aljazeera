@@ -5,6 +5,9 @@ import re
 import difflib
 from datetime import datetime, timedelta
 from oauth2client.service_account import ServiceAccountCredentials
+import vobject  # For VCF file parsing
+import tempfile
+import os
 
 # Constants
 SPREADSHEET_NAME = "Al-Jazeera"
@@ -71,6 +74,35 @@ def add_contact_to_sheet(contact_data):
         return True
     except Exception as e:
         st.error(f"Error adding contact: {str(e)}")
+        return False
+
+def delete_contacts_from_sheet(row_numbers):
+    try:
+        client = get_gsheet_client()
+        sheet = client.open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
+        
+        valid_rows = [row_num for row_num in row_numbers if row_num > 1]
+        if not valid_rows:
+            return True
+            
+        valid_rows.sort(reverse=True)
+        
+        BATCH_SIZE = 10
+        for i in range(0, len(valid_rows), BATCH_SIZE):
+            batch = valid_rows[i:i+BATCH_SIZE]
+            for row_num in batch:
+                try:
+                    sheet.delete_rows(row_num)
+                except Exception as e:
+                    st.error(f"Error deleting row {row_num}: {str(e)}")
+                    continue
+                    
+            import time
+            time.sleep(1)
+            
+        return True
+    except Exception as e:
+        st.error(f"Error in delete operation: {str(e)}")
         return False
 
 def filter_by_date(df, label):
@@ -170,7 +202,7 @@ def _split_blocks_for_limits(blocks, plain_limit=3000, encoded_limit=1800):
                 small = ""
                 for ln in lines:
                     cand2 = small + ln
-                    if len(cand2) > plain_limit or len(_url_encode_for_whatsapp(cand2)) > encoded_limit:
+                    if len(cand2) > plain极限 or len(_url_encode_for_whatsapp(cand2)) > encoded_limit:
                         if small:
                             chunks.append(small.rstrip())
                             small = ""
@@ -307,7 +339,7 @@ def create_duplicates_view(df):
         return None, pd.DataFrame()
     
     # Correct usage of astype
-    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
+    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].ast(str) + "|" + df["Plot Size"].astype(str)
     
     group_counts = df["GroupKey"].value_counts()
     
@@ -344,19 +376,78 @@ def format_phone_link(phone):
     else:
         return cleaned
 
+# Parse VCF file
+def parse_vcf_file(vcf_file):
+    contacts = []
+    try:
+        # Read the uploaded file
+        content = vcf_file.getvalue().decode("utf-8")
+        
+        # Parse vCard content
+        vcards = vobject.readComponents(content)
+        
+        for vcard in vcards:
+            try:
+                name = ""
+                if hasattr(vcard, 'fn') and vcard.fn.value:
+                    name = vcard.fn.value
+                
+                phones = []
+                if hasattr(vcard, 'tel'):
+                    if isinstance(vcard.tel, list):
+                        for tel in vcard.tel:
+                            phones.append(tel.value)
+                    else:
+                        phones.append(vcard.tel.value)
+                
+                email = ""
+                if hasattr(vcard, 'email'):
+                    if isinstance(vcard.email, list):
+                        email = vcard.email[0].value if vcard.email else ""
+                    else:
+                        email = vcard.email.value
+                
+                # Add contact if we have at least a name or phone number
+                if name or phones:
+                    contacts.append({
+                        "Name": name,
+                        "Contact1": phones[0] if phones else "",
+                        "Contact2": phones[1] if len(phones) > 1 else "",
+                        "Contact3": phones[2] if len(phones) > 2 else "",
+                        "Email": email,
+                        "Address": ""  # VCF typically doesn't have address in a simple field
+                    })
+            except Exception as e:
+                st.warning(f"Could not parse one contact: {e}")
+                continue
+                
+    except Exception as e:
+        st.error(f"Error parsing VCF file: {e}")
+    
+    return contacts
+
 # --- Streamlit App ---
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
     
+    # Initialize session state for tab management
+    if "active_tab" not in st.session_state:
+        st.session_state.active_tab = "Plots"
+    if "selected_contact" not in st.session_state:
+        st.session_state.selected_contact = None
+    
     # Create tabs
-    tab1, tab2, tab3 = st.tabs(["Plots", "Contacts", "Leads Management"])
+    tabs = st.tabs(["Plots", "Contacts", "Leads Management"])
     
     # Load data
     df = load_plot_data().fillna("")
     contacts_df = load_contacts()
     
+    # Add row numbers to contacts for deletion
+    contacts_df["SheetRowNum"] = [i + 2 for i in range(len(contacts_df))]
+    
     # Tab 1: Plots
-    with tab1:
+    with tabs[0]:
         all_features = get_all_unique_features(df)
         
         with st.sidebar:
@@ -381,7 +472,15 @@ def main():
             selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names)
 
             contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
-            selected_saved = st.selectbox("📇 Saved Contact (by number)", contact_names)
+            
+            # Pre-select contact if coming from Contacts tab
+            if st.session_state.selected_contact:
+                selected_saved = st.selectbox("📇 Saved Contact (by number)", contact_names, 
+                                             index=contact_names.index(st.session_state.selected_contact) if st.session_state.selected_contact in contact_names else 0)
+                # Reset after using
+                st.session_state.selected_contact = None
+            else:
+                selected_saved = st.selectbox("📇 Saved Contact (by number)", contact_names)
         
         # Display dealer contact info if selected
         if selected_dealer:
@@ -655,7 +754,7 @@ def main():
                     st.markdown("---")
     
     # Tab 2: Contacts
-    with tab2:
+    with tabs[1]:
         st.header("📇 Contact Management")
         
         # Add new contact form
@@ -663,8 +762,8 @@ def main():
             st.subheader("Add New Contact")
             col1, col2 = st.columns(2)
             name = col1.text_input("Name*", key="contact_name")
-            contact1 = col1.text_input("Contact 1", key="contact_1")
-            contact2 = col2.text_input("Contact 2*", key="contact_2")
+            contact1 = col1.text_input("Contact 1*", key="contact_1")
+            contact2 = col2.text_input("Contact 2", key="contact_2")
             contact3 = col2.text_input("Contact 3", key="contact_3")
             email = col1.text_input("Email", key="contact_email")
             address = col2.text_input("Address", key="contact_address")
@@ -672,10 +771,10 @@ def main():
             submitted = st.form_submit_button("Add Contact")
             
             if submitted:
-                if not name or not contact2:
-                    st.error("Name and Contact 2 are required fields!")
+                if not name or not contact1:
+                    st.error("Name and Contact 1 are required fields!")
                 else:
-                    contact_data = [name, contact1 or "", contact2, contact3 or "", email or "", address or ""]
+                    contact_data = [name, contact1, contact2 or "", contact3 or "", email or "", address or ""]
                     if add_contact_to_sheet(contact_data):
                         st.success("Contact added successfully!")
                         # Clear cache to reload contacts
@@ -685,12 +784,101 @@ def main():
                         st.error("Failed to add contact. Please try again.")
         
         st.markdown("---")
+        
+        # Import contacts from VCF
+        st.subheader("Import Contacts from VCF")
+        vcf_file = st.file_uploader("Upload VCF file", type=["vcf"], key="vcf_uploader")
+        
+        if vcf_file is not None:
+            contacts = parse_vcf_file(vcf_file)
+            if contacts:
+                st.success(f"Found {len(contacts)} contacts in the VCF file")
+                
+                # Display contacts for review
+                for i, contact in enumerate(contacts):
+                    with st.expander(f"Contact {i+1}: {contact['Name']}"):
+                        st.write(f"**Contact 1:** {contact['Contact1']}")
+                        st.write(f"**Contact 2:** {contact['Contact2']}")
+                        st.write(f"**Contact 3:** {contact['Contact3']}")
+                        st.write(f"**Email:** {contact['Email']}")
+                
+                # Button to import all contacts
+                if st.button("Import All Contacts", key="import_all"):
+                    success_count = 0
+                    for contact in contacts:
+                        contact_data = [
+                            contact["Name"],
+                            contact["Contact1"],
+                            contact["Contact2"],
+                            contact["Contact3"],
+                            contact["Email"],
+                            contact["Address"]
+                        ]
+                        if add_contact_to_sheet(contact_data):
+                            success_count += 1
+                    
+                    st.success(f"Successfully imported {success_count} out of {len(contacts)} contacts")
+                    st.cache_data.clear()
+                    st.rerun()
+        
+        st.markdown("---")
         st.subheader("Saved Contacts")
         
-        # Display existing contacts
+        # Display existing contacts with selection for deletion
         if not contacts_df.empty:
+            # Create a copy for editing
+            contacts_display = contacts_df.copy().reset_index(drop=True)
+            contacts_display.insert(0, "Select", False)
+            
+            # Add "Select All" checkbox
+            select_all_contacts = st.checkbox("Select All Contacts", key="select_all_contacts")
+            if select_all_contacts:
+                contacts_display["Select"] = True
+            
+            # Configure columns for data editor
+            column_config = {
+                "Select": st.column_config.CheckboxColumn(required=True),
+                "SheetRowNum": st.column_config.NumberColumn(disabled=True)
+            }
+            
+            # Display editable dataframe with checkboxes
+            edited_contacts = st.data_editor(
+                contacts_display,
+                column_config=column_config,
+                hide_index=True,
+                use_container_width=True,
+                disabled=contacts_display.columns.difference(["Select"]).tolist()
+            )
+            
+            # Get selected contacts
+            selected_contacts = edited_contacts[edited_contacts["Select"]]
+            
+            if not selected_contacts.empty:
+                st.markdown(f"**{len(selected_contacts)} contact(s) selected**")
+                
+                # Show delete confirmation
+                if st.button("🗑️ Delete Selected Contacts", type="primary", key="delete_contacts"):
+                    row_nums = selected_contacts["SheetRowNum"].tolist()
+                    
+                    # Show progress
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    # Delete with progress updates
+                    success = delete_contacts_from_sheet(row_nums)
+                    
+                    if success:
+                        progress_bar.progress(100)
+                        status_text.success(f"✅ Successfully deleted {len(selected_contacts)} contact(s)!")
+                        # Clear cache and refresh
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        status_text.error("❌ Failed to delete some contacts. Please try again.")
+            
+            # Display individual contacts with "Show Shared Listings" button
             for idx, row in contacts_df.iterrows():
-                with st.expander(f"{row['Name']} - {row['Contact2']}"):
+                with st.expander(f"{row['Name']} - {row.get('Contact1', '')}"):
                     col1, col2 = st.columns(2)
                     col1.write(f"**Contact 1:** {row.get('Contact1', '')}")
                     col1.write(f"**Contact 2:** {row.get('Contact2', '')}")
@@ -701,14 +889,14 @@ def main():
                     # Button to show shared listings
                     if st.button("Show Shared Listings", key=f"show_listings_{idx}"):
                         # Set the contact filter in session state and switch to Plots tab
-                        st.session_state.saved_contact_filter = row['Name']
+                        st.session_state.selected_contact = row['Name']
                         st.session_state.active_tab = "Plots"
                         st.rerun()
         else:
             st.info("No contacts found. Add a new contact using the form above.")
     
     # Tab 3: Leads Management
-    with tab3:
+    with tabs[2]:
         st.header("📊 Leads Management")
         st.info("This section is under development and will be available in the next phase.")
 
