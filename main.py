@@ -63,6 +63,16 @@ def load_contacts():
     sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
     return pd.DataFrame(sheet.get_all_records())
 
+def add_contact_to_sheet(contact_data):
+    try:
+        client = get_gsheet_client()
+        sheet = client.open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
+        sheet.append_row(contact_data)
+        return True
+    except Exception as e:
+        st.error(f"Error adding contact: {str(e)}")
+        return False
+
 def filter_by_date(df, label):
     if label == "All":
         return df
@@ -322,198 +332,161 @@ def create_duplicates_view(df):
     styled_df = duplicate_df.style.apply(apply_row_color, axis=1)
     return styled_df, duplicate_df
 
+# Format phone number for tel: link
+def format_phone_link(phone):
+    cleaned = clean_number(phone)
+    if len(cleaned) == 10 and cleaned.startswith('3'):
+        return f"92{cleaned}"
+    elif len(cleaned) == 11 and cleaned.startswith('03'):
+        return f"92{cleaned[1:]}"
+    elif len(cleaned) == 12 and cleaned.startswith('92'):
+        return cleaned
+    else:
+        return cleaned
+
 # --- Streamlit App ---
 def main():
     st.title("🏡 Al-Jazeera Real Estate Tool")
-
+    
+    # Create tabs
+    tab1, tab2, tab3 = st.tabs(["Plots", "Contacts", "Leads Management"])
+    
     # Load data
     df = load_plot_data().fillna("")
     contacts_df = load_contacts()
-
-    all_features = get_all_unique_features(df)
-
-    with st.sidebar:
-        st.header("🔍 Filters")
-        sector_filter = st.text_input("Sector")
-        plot_size_filter = st.text_input("Plot Size")
-        street_filter = st.text_input("Street No")
-        plot_no_filter = st.text_input("Plot No")
-        contact_filter = st.text_input("Phone Number (03xxxxxxxxx)")
-        price_from = st.number_input("Price From (in Lacs)", min_value=0.0, value=0.0, step=1.0)
-        price_to = st.number_input("Price To (in Lacs)", min_value=0.0, value=1000.0, step=1.0)
-        selected_features = st.multiselect("Select Feature(s)", options=all_features)
-        date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
-
-        # NEW: Property Type filter populated from sheet
-        prop_type_options = ["All"]
-        if "Property Type" in df.columns:
-            prop_type_options += sorted([str(v).strip() for v in df["Property Type"].dropna().astype(str).unique()])
-        selected_prop_type = st.selectbox("Property Type", prop_type_options)
-
-        dealer_names, contact_to_name = build_name_map(df)
-        selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names)
-
-        contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
-        selected_saved = st.selectbox("📇 Saved Contact (by number)", contact_names)
-
-    df_filtered = df.copy()
-
-    if selected_dealer:
-        actual_name = selected_dealer.split(". ", 1)[1] if ". " in selected_dealer else selected_dealer
-        selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
-        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
-            lambda x: any(c in clean_number(x) for c in selected_contacts))]
-
-    if selected_saved:
-        row = contacts_df[contacts_df["Name"] == selected_saved].iloc[0] if not contacts_df[contacts_df["Name"] == selected_saved].empty else None
-        selected_contacts = []
-        if row is not None:
-            for col in ["Contact1", "Contact2", "Contact3"]:
-                if col in row and pd.notna(row[col]):
-                    selected_contacts.extend(extract_numbers(row[col]))
-        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
-            lambda x: any(n in clean_number(x) for n in selected_contacts))]
-
-    if sector_filter:
-        df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
-    if plot_size_filter:
-        df_filtered = df_filtered[df_filtered["Plot Size"].str.contains(plot_size_filter, case=False, na=False)]
     
-    # Enhanced Street No filter - match exact or partial matches
-    if street_filter:
-        street_pattern = re.compile(re.escape(street_filter), re.IGNORECASE)
-        df_filtered = df_filtered[df_filtered["Street No"].apply(lambda x: bool(street_pattern.search(str(x))))]
-    
-    # Enhanced Plot No filter - match exact or partial matches
-    if plot_no_filter:
-        plot_pattern = re.compile(re.escape(plot_no_filter), re.IGNORECASE)
-        df_filtered = df_filtered[df_filtered["Plot No"].apply(lambda x: bool(plot_pattern.search(str(x))))]
-    
-    if contact_filter:
-        cnum = clean_number(contact_filter)
-        df_filtered = df_filtered[df_filtered["Extracted Contact"].astype(str).apply(
-            lambda x: any(cnum == clean_number(p) for p in x.split(",")))]
-
-    # NEW: Apply Property Type filter if selected
-    if "Property Type" in df_filtered.columns and selected_prop_type and selected_prop_type != "All":
-        df_filtered = df_filtered[df_filtered["Property Type"].astype(str).str.strip() == selected_prop_type]
-
-    df_filtered["ParsedPrice"] = df_filtered["Demand"].apply(parse_price)
-    df_filtered = df_filtered[df_filtered["ParsedPrice"].notnull()]
-    df_filtered = df_filtered[(df_filtered["ParsedPrice"] >= price_from) & (df_filtered["ParsedPrice"] <= price_to)]
-
-    if selected_features:
-        df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match(x, selected_features))]
-
-    df_filtered = filter_by_date(df_filtered, date_filter)
-
-    # Move Timestamp column to the end
-    if "Timestamp" in df_filtered.columns:
-        cols = [col for col in df_filtered.columns if col != "Timestamp"] + ["Timestamp"]
-        df_filtered = df_filtered[cols]
-
-    st.subheader("📋 Filtered Listings")
-    
-    # Count WhatsApp eligible listings (same rules you had)
-    whatsapp_eligible_count = 0
-    for _, row in df_filtered.iterrows():
-        sector = str(row.get("Sector", "")).strip()
-        plot_no = str(row.get("Plot No", "")).strip()
-        size = str(row.get("Plot Size", "")).strip()
-        price = str(row.get("Demand", "")).strip()
-        street = str(row.get("Street No", "")).strip()
+    # Tab 1: Plots
+    with tab1:
+        all_features = get_all_unique_features(df)
         
-        if not (sector and plot_no and size and price):
-            continue
-        if "I-15/" in sector and not street:
-            continue
-        if "series" in plot_no.lower():
-            continue
-        whatsapp_eligible_count += 1
-    
-    st.info(f"📊 Total filtered listings: {len(df_filtered)} | ✅ WhatsApp eligible: {whatsapp_eligible_count}")
-    
-    # Row selection and deletion feature for main table
-    if not df_filtered.empty:
-        display_df = df_filtered.copy().reset_index(drop=True)
-        display_df.insert(0, "Select", False)
+        with st.sidebar:
+            st.header("🔍 Filters")
+            sector_filter = st.text_input("Sector")
+            plot_size_filter = st.text_input("Plot Size")
+            street_filter = st.text_input("Street No")
+            plot_no_filter = st.text_input("Plot No")
+            contact_filter = st.text_input("Phone Number (03xxxxxxxxx)")
+            price_from = st.number_input("Price From (in Lacs)", min_value=0.0, value=0.0, step=1.0)
+            price_to = st.number_input("Price To (in Lacs)", min_value=0.0, value=1000.0, step=1.0)
+            selected_features = st.multiselect("Select Feature(s)", options=all_features)
+            date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
+
+            # Property Type filter
+            prop_type_options = ["All"]
+            if "Property Type" in df.columns:
+                prop_type_options += sorted([str(v).strip() for v in df["Property Type"].dropna().astype(str).unique()])
+            selected_prop_type = st.selectbox("Property Type", prop_type_options)
+
+            dealer_names, contact_to_name = build_name_map(df)
+            selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names)
+
+            contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
+            selected_saved = st.selectbox("📇 Saved Contact (by number)", contact_names)
         
-        # Add "Select All" checkbox
-        select_all = st.checkbox("Select All Rows", key="select_all_main")
-        if select_all:
-            display_df["Select"] = True
-        
-        # Configure columns for data editor
-        column_config = {
-            "Select": st.column_config.CheckboxColumn(required=True),
-            "SheetRowNum": st.column_config.NumberColumn(disabled=True)
-        }
-        
-        # Display editable dataframe with checkboxes
-        edited_df = st.data_editor(
-            display_df,
-            column_config=column_config,
-            hide_index=True,
-            use_container_width=True,
-            disabled=display_df.columns.difference(["Select"]).tolist()
-        )
-        
-        # Get selected rows
-        selected_rows = edited_df[edited_df["Select"]]
-        
-        if not selected_rows.empty:
-            st.markdown(f"**{len(selected_rows)} row(s) selected**")
+        # Display dealer contact info if selected
+        if selected_dealer:
+            actual_name = selected_dealer.split(". ", 1)[1] if ". " in selected_dealer else selected_dealer
             
-            # Show delete confirmation with progress bar
-            if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_button_main"):
-                row_nums = selected_rows["SheetRowNum"].tolist()
-                
-                # Show progress
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                # Delete with progress updates
-                success = delete_rows_from_sheet(row_nums)
-                
-                if success:
-                    progress_bar.progress(100)
-                    status_text.success(f"✅ Successfully deleted {len(selected_rows)} row(s)!")
-                    # Clear cache and refresh
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    status_text.error("❌ Failed to delete some rows. Please try again.")
-    else:
-        st.info("No listings match your filters")
-    
-    st.markdown("---")
-    st.subheader("👥 Duplicate Listings (Matching Sector, Plot No, Street No, Plot Size)")
-    
-    # Create and display grouped view with colors for duplicates
-    if not df_filtered.empty:
-        # Generate styled DataFrame with duplicate groups
-        styled_duplicates_df, duplicates_df = create_duplicates_view(df_filtered)
+            # Find all numbers for this dealer
+            dealer_numbers = []
+            for contact, name in contact_to_name.items():
+                if name == actual_name:
+                    dealer_numbers.append(contact)
+            
+            if dealer_numbers:
+                st.subheader(f"📞 Contact: {actual_name}")
+                cols = st.columns(len(dealer_numbers))
+                for i, num in enumerate(dealer_numbers):
+                    formatted_num = format_phone_link(num)
+                    cols[i].markdown(f'<a href="tel:{formatted_num}" style="display: inline-block; padding: 0.5rem 1rem; background-color: #25D366; color: white; text-decoration: none; border-radius: 0.5rem;">Call {num}</a>', 
+                                    unsafe_allow_html=True)
+
+        df_filtered = df.copy()
+
+        if selected_dealer:
+            actual_name = selected_dealer.split(". ", 1)[1] if ". " in selected_dealer else selected_dealer
+            selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
+            df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
+                lambda x: any(c in clean_number(x) for c in selected_contacts))]
+
+        if selected_saved:
+            row = contacts_df[contacts_df["Name"] == selected_saved].iloc[0] if not contacts_df[contacts_df["Name"] == selected_saved].empty else None
+            selected_contacts = []
+            if row is not None:
+                for col in ["Contact1", "Contact2", "Contact3"]:
+                    if col in row and pd.notna(row[col]):
+                        selected_contacts.extend(extract_numbers(row[col]))
+            df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
+                lambda x: any(n in clean_number(x) for n in selected_contacts))]
+
+        if sector_filter:
+            df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
+        if plot_size_filter:
+            df_filtered = df_filtered[df_filtered["Plot Size"].str.contains(plot_size_filter, case=False, na=False)]
         
-        if duplicates_df.empty:
-            st.info("No duplicate listings found")
-        else:
-            st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
+        # Enhanced Street No filter - match exact or partial matches
+        if street_filter:
+            street_pattern = re.compile(re.escape(street_filter), re.IGNORECASE)
+            df_filtered = df_filtered[df_filtered["Street No"].apply(lambda x: bool(street_pattern.search(str(x))))]
+        
+        # Enhanced Plot No filter - match exact or partial matches
+        if plot_no_filter:
+            plot_pattern = re.compile(re.escape(plot_no_filter), re.IGNORECASE)
+            df_filtered = df_filtered[df_filtered["Plot No"].apply(lambda x: bool(plot_pattern.search(str(x))))]
+        
+        if contact_filter:
+            cnum = clean_number(contact_filter)
+            df_filtered = df_filtered[df_filtered["Extracted Contact"].astype(str).apply(
+                lambda x: any(cnum == clean_number(p) for p in x.split(",")))]
+
+        # Apply Property Type filter if selected
+        if "Property Type" in df_filtered.columns and selected_prop_type and selected_prop_type != "All":
+            df_filtered = df_filtered[df_filtered["Property Type"].astype(str).str.strip() == selected_prop_type]
+
+        df_filtered["ParsedPrice"] = df_filtered["Demand"].apply(parse_price)
+        df_filtered = df_filtered[df_filtered["ParsedPrice"].notnull()]
+        df_filtered = df_filtered[(df_filtered["ParsedPrice"] >= price_from) & (df_filtered["ParsedPrice"] <= price_to)]
+
+        if selected_features:
+            df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match(x, selected_features))]
+
+        df_filtered = filter_by_date(df_filtered, date_filter)
+
+        # Move Timestamp column to the end
+        if "Timestamp" in df_filtered.columns:
+            cols = [col for col in df_filtered.columns if col != "Timestamp"] + ["Timestamp"]
+            df_filtered = df_filtered[cols]
+
+        st.subheader("📋 Filtered Listings")
+        
+        # Count WhatsApp eligible listings (same rules you had)
+        whatsapp_eligible_count = 0
+        for _, row in df_filtered.iterrows():
+            sector = str(row.get("Sector", "")).strip()
+            plot_no = str(row.get("Plot No", "")).strip()
+            size = str(row.get("Plot Size", "")).strip()
+            price = str(row.get("Demand", "")).strip()
+            street = str(row.get("Street No", "")).strip()
             
-            # Display the styled DataFrame (color-coded)
-            st.dataframe(
-                styled_duplicates_df,
-                use_container_width=True,
-                hide_index=True
-            )
+            if not (sector and plot_no and size and price):
+                continue
+            if "I-15/" in sector and not street:
+                continue
+            if "series" in plot_no.lower():
+                continue
+            whatsapp_eligible_count += 1
+        
+        st.info(f"📊 Total filtered listings: {len(df_filtered)} | ✅ WhatsApp eligible: {whatsapp_eligible_count}")
+        
+        # Row selection and deletion feature for main table
+        if not df_filtered.empty:
+            display_df = df_filtered.copy().reset_index(drop=True)
+            display_df.insert(0, "Select", False)
             
-            # Create a copy for deletion with selection column
-            duplicate_display = duplicates_df.copy().reset_index(drop=True)
-            duplicate_display.insert(0, "Select", False)
-            
-            # Add "Select All" checkbox for duplicates
-            select_all_duplicates = st.checkbox("Select All Duplicate Rows", key="select_all_duplicates")
-            if select_all_duplicates:
-                duplicate_display["Select"] = True
+            # Add "Select All" checkbox
+            select_all = st.checkbox("Select All Rows", key="select_all_main")
+            if select_all:
+                display_df["Select"] = True
             
             # Configure columns for data editor
             column_config = {
@@ -522,23 +495,23 @@ def main():
             }
             
             # Display editable dataframe with checkboxes
-            edited_duplicates = st.data_editor(
-                duplicate_display,
+            edited_df = st.data_editor(
+                display_df,
                 column_config=column_config,
                 hide_index=True,
                 use_container_width=True,
-                disabled=duplicate_display.columns.difference(["Select"]).tolist()
+                disabled=display_df.columns.difference(["Select"]).tolist()
             )
             
             # Get selected rows
-            selected_duplicates = edited_duplicates[edited_duplicates["Select"]]
+            selected_rows = edited_df[edited_df["Select"]]
             
-            if not selected_duplicates.empty:
-                st.markdown(f"**{len(selected_duplicates)} duplicate row(s) selected**")
+            if not selected_rows.empty:
+                st.markdown(f"**{len(selected_rows)} row(s) selected**")
                 
                 # Show delete confirmation with progress bar
-                if st.button("🗑️ Delete Selected Duplicate Rows", type="primary", key="delete_button_duplicates"):
-                    row_nums = selected_duplicates["SheetRowNum"].tolist()
+                if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_button_main"):
+                    row_nums = selected_rows["SheetRowNum"].tolist()
                     
                     # Show progress
                     progress_bar = st.progress(0)
@@ -549,65 +522,195 @@ def main():
                     
                     if success:
                         progress_bar.progress(100)
-                        status_text.success(f"✅ Successfully deleted {len(selected_duplicates)} duplicate row(s)!")
+                        status_text.success(f"✅ Successfully deleted {len(selected_rows)} row(s)!")
                         # Clear cache and refresh
                         st.cache_data.clear()
                         st.rerun()
                     else:
                         status_text.error("❌ Failed to delete some rows. Please try again.")
-    else:
-        st.info("No listings to analyze for duplicates")
-
-    st.markdown("---")
-    st.subheader("📤 Send WhatsApp Message")
-
-    selected_name_whatsapp = st.selectbox("📱 Select Contact to Message", contact_names, key="wa_contact")
-    manual_number = st.text_input("Or Enter WhatsApp Number (e.g. 0300xxxxxxx)")
-
-    if st.button("Generate WhatsApp Message"):
-        cleaned = ""
-        if manual_number:
-            cleaned = clean_number(manual_number)
-        elif selected_name_whatsapp:
-            contact_row = contacts_df[contacts_df["Name"] == selected_name_whatsapp]
-            if not contact_row.empty:
-                row = contact_row.iloc[0]
-                numbers = []
-                for col in ["Contact1", "Contact2", "Contact3"]:
-                    if col in row and pd.notna(row[col]):
-                        numbers.append(clean_number(row[col]))
-                cleaned = numbers[0] if numbers else ""
-
-        if not cleaned:
-            st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
-            return
-
-        if len(cleaned) == 10 and cleaned.startswith("3"):
-            wa_number = "92" + cleaned
-        elif len(cleaned) == 11 and cleaned.startswith("03"):
-            wa_number = "92" + cleaned[1:]
-        elif len(cleaned) == 12 and cleaned.startswith("92"):
-            wa_number = cleaned
         else:
-            st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
-            return
-
-        # Use the same filtered dataframe as the main table with intentional filters
-        messages = generate_whatsapp_messages(df_filtered)
-        if not messages:
-            st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots.")
-        else:
-            st.success(f"📨 Generated {len(messages)} WhatsApp message(s)")
+            st.info("No listings match your filters")
+        
+        st.markdown("---")
+        st.subheader("👥 Duplicate Listings (Matching Sector, Plot No, Street No, Plot Size)")
+        
+        # Create and display grouped view with colors for duplicates
+        if not df_filtered.empty:
+            # Generate styled DataFrame with duplicate groups
+            styled_duplicates_df, duplicates_df = create_duplicates_view(df_filtered)
             
-            # Show message previews and safe links
-            for i, msg in enumerate(messages):
-                st.markdown(f"**Message {i+1}** ({len(msg)} characters):")
-                st.text_area(f"Preview Message {i+1}", msg, height=150, key=f"msg_preview_{i}")
+            if duplicates_df.empty:
+                st.info("No duplicate listings found")
+            else:
+                st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
                 
-                encoded = msg.replace(" ", "%20").replace("\n", "%0A")
-                link = f"https://wa.me/{wa_number}?text={encoded}"
-                st.markdown(f"[📩 Send Message {i+1}]({link})", unsafe_allow_html=True)
-                st.markdown("---")
+                # Display the styled DataFrame (color-coded)
+                st.dataframe(
+                    styled_duplicates_df,
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Create a copy for deletion with selection column
+                duplicate_display = duplicates_df.copy().reset_index(drop=True)
+                duplicate_display.insert(0, "Select", False)
+                
+                # Add "Select All" checkbox for duplicates
+                select_all_duplicates = st.checkbox("Select All Duplicate Rows", key="select_all_duplicates")
+                if select_all_duplicates:
+                    duplicate_display["Select"] = True
+                
+                # Configure columns for data editor
+                column_config = {
+                    "Select": st.column_config.CheckboxColumn(required=True),
+                    "SheetRowNum": st.column_config.NumberColumn(disabled=True)
+                }
+                
+                # Display editable dataframe with checkboxes
+                edited_duplicates = st.data_editor(
+                    duplicate_display,
+                    column_config=column_config,
+                    hide_index=True,
+                    use_container_width=True,
+                    disabled=duplicate_display.columns.difference(["Select"]).tolist()
+                )
+                
+                # Get selected rows
+                selected_duplicates = edited_duplicates[edited_duplicates["Select"]]
+                
+                if not selected_duplicates.empty:
+                    st.markdown(f"**{len(selected_duplicates)} duplicate row(s) selected**")
+                    
+                    # Show delete confirmation with progress bar
+                    if st.button("🗑️ Delete Selected Duplicate Rows", type="primary", key="delete_button_duplicates"):
+                        row_nums = selected_duplicates["SheetRowNum"].tolist()
+                        
+                        # Show progress
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        # Delete with progress updates
+                        success = delete_rows_from_sheet(row_nums)
+                        
+                        if success:
+                            progress_bar.progress(100)
+                            status_text.success(f"✅ Successfully deleted {len(selected_duplicates)} duplicate row(s)!")
+                            # Clear cache and refresh
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            status_text.error("❌ Failed to delete some rows. Please try again.")
+        else:
+            st.info("No listings to analyze for duplicates")
+
+        st.markdown("---")
+        st.subheader("📤 Send WhatsApp Message")
+
+        selected_name_whatsapp = st.selectbox("📱 Select Contact to Message", contact_names, key="wa_contact")
+        manual_number = st.text_input("Or Enter WhatsApp Number (e.g. 0300xxxxxxx)")
+
+        if st.button("Generate WhatsApp Message"):
+            cleaned = ""
+            if manual_number:
+                cleaned = clean_number(manual_number)
+            elif selected_name_whatsapp:
+                contact_row = contacts_df[contacts_df["Name"] == selected_name_whatsapp]
+                if not contact_row.empty:
+                    row = contact_row.iloc[0]
+                    numbers = []
+                    for col in ["Contact1", "Contact2", "Contact3"]:
+                        if col in row and pd.notna(row[col]):
+                            numbers.append(clean_number(row[col]))
+                    cleaned = numbers[0] if numbers else ""
+
+            if not cleaned:
+                st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
+                return
+
+            if len(cleaned) == 10 and cleaned.startswith("3"):
+                wa_number = "92" + cleaned
+            elif len(cleaned) == 11 and cleaned.startswith("03"):
+                wa_number = "92" + cleaned[1:]
+            elif len(cleaned) == 12 and cleaned.startswith("92"):
+                wa_number = cleaned
+            else:
+                st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
+                return
+
+            # Use the same filtered dataframe as the main table with intentional filters
+            messages = generate_whatsapp_messages(df_filtered)
+            if not messages:
+                st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots.")
+            else:
+                st.success(f"📨 Generated {len(messages)} WhatsApp message(s)")
+                
+                # Show message previews and safe links
+                for i, msg in enumerate(messages):
+                    st.markdown(f"**Message {i+1}** ({len(msg)} characters):")
+                    st.text_area(f"Preview Message {i+1}", msg, height=150, key=f"msg_preview_{i}")
+                    
+                    encoded = msg.replace(" ", "%20").replace("\n", "%0A")
+                    link = f"https://wa.me/{wa_number}?text={encoded}"
+                    st.markdown(f"[📩 Send Message {i+1}]({link})", unsafe_allow_html=True)
+                    st.markdown("---")
+    
+    # Tab 2: Contacts
+    with tab2:
+        st.header("📇 Contact Management")
+        
+        # Add new contact form
+        with st.form("add_contact_form"):
+            st.subheader("Add New Contact")
+            col1, col2 = st.columns(2)
+            name = col1.text_input("Name*", key="contact_name")
+            contact1 = col1.text_input("Contact 1", key="contact_1")
+            contact2 = col2.text_input("Contact 2*", key="contact_2")
+            contact3 = col2.text_input("Contact 3", key="contact_3")
+            email = col1.text_input("Email", key="contact_email")
+            address = col2.text_input("Address", key="contact_address")
+            
+            submitted = st.form_submit_button("Add Contact")
+            
+            if submitted:
+                if not name or not contact2:
+                    st.error("Name and Contact 2 are required fields!")
+                else:
+                    contact_data = [name, contact1 or "", contact2, contact3 or "", email or "", address or ""]
+                    if add_contact_to_sheet(contact_data):
+                        st.success("Contact added successfully!")
+                        # Clear cache to reload contacts
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error("Failed to add contact. Please try again.")
+        
+        st.markdown("---")
+        st.subheader("Saved Contacts")
+        
+        # Display existing contacts
+        if not contacts_df.empty:
+            for idx, row in contacts_df.iterrows():
+                with st.expander(f"{row['Name']} - {row['Contact2']}"):
+                    col1, col2 = st.columns(2)
+                    col1.write(f"**Contact 1:** {row.get('Contact1', '')}")
+                    col1.write(f"**Contact 2:** {row.get('Contact2', '')}")
+                    col1.write(f"**Contact 3:** {row.get('Contact3', '')}")
+                    col2.write(f"**Email:** {row.get('Email', '')}")
+                    col2.write(f"**Address:** {row.get('Address', '')}")
+                    
+                    # Button to show shared listings
+                    if st.button("Show Shared Listings", key=f"show_listings_{idx}"):
+                        # Set the contact filter in session state and switch to Plots tab
+                        st.session_state.saved_contact_filter = row['Name']
+                        st.session_state.active_tab = "Plots"
+                        st.rerun()
+        else:
+            st.info("No contacts found. Add a new contact using the form above.")
+    
+    # Tab 3: Leads Management
+    with tab3:
+        st.header("📊 Leads Management")
+        st.info("This section is under development and will be available in the next phase.")
 
 if __name__ == "__main__":
     main()
