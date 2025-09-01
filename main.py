@@ -339,7 +339,7 @@ def create_duplicates_view(df):
         return None, pd.DataFrame()
     
     # Correct usage of astype
-    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].ast(str) + "|" + df["Plot Size"].astype(str)
+    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
     
     group_counts = df["GroupKey"].value_counts()
     
