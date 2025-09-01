@@ -859,7 +859,7 @@ if st.button("Generate WhatsApp Message"):
 
     if not cleaned:
         st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
-        return
+        st.stop()
 
     if len(cleaned) == 10 and cleaned.startswith("3"):
         wa_number = "92" + cleaned
