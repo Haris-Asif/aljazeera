@@ -186,9 +186,8 @@ class GoogleSheetsService:
                 raise
     
     @handle_errors
-    @lru_cache(maxsize=32)
     def load_data(self, sheet_name: str, expected_columns: List[str] = None) -> pd.DataFrame:
-        """Load data from worksheet with caching"""
+        """Load data from worksheet"""
         try:
             worksheet = self.get_worksheet(sheet_name)
             records = worksheet.get_all_records()
@@ -244,7 +243,6 @@ gs_service = GoogleSheetsService()
 
 # Data loading functions with proper error handling
 @handle_errors
-@st.cache_data(ttl=300)
 def load_plot_data() -> pd.DataFrame:
     """Load plot data from Google Sheets"""
     df = gs_service.load_data(SheetNames.PLOTS)
@@ -255,13 +253,11 @@ def load_plot_data() -> pd.DataFrame:
     return df
 
 @handle_errors
-@st.cache_data(ttl=300)
 def load_contacts() -> pd.DataFrame:
     """Load contacts data from Google Sheets"""
     return gs_service.load_data(SheetNames.CONTACTS)
 
 @handle_errors
-@st.cache_data(ttl=300)
 def load_leads() -> pd.DataFrame:
     """Load leads data from Google Sheets"""
     expected_columns = [
@@ -282,7 +278,6 @@ def load_leads() -> pd.DataFrame:
     return gs_service.load_data(SheetNames.LEADS, expected_columns)
 
 @handle_errors
-@st.cache_data(ttl=300)
 def load_lead_activities() -> pd.DataFrame:
     """Load lead activities data from Google Sheets"""
     expected_columns = [
@@ -300,7 +295,6 @@ def load_lead_activities() -> pd.DataFrame:
     return gs_service.load_data(SheetNames.ACTIVITIES, expected_columns)
 
 @handle_errors
-@st.cache_data(ttl=300)
 def load_tasks() -> pd.DataFrame:
     """Load tasks data from Google Sheets"""
     expected_columns = [
@@ -318,7 +312,6 @@ def load_tasks() -> pd.DataFrame:
     return gs_service.load_data(SheetNames.TASKS, expected_columns)
 
 @handle_errors
-@st.cache_data(ttl=300)
 def load_appointments() -> pd.DataFrame:
     """Load appointments data from Google Sheets"""
     expected_columns = [
@@ -726,24 +719,7 @@ def display_phone_with_dialer(phone: str) -> str:
     else:
         return phone
 
-def format_contact_column(contact_str: str) -> str:
-    """Format Extracted Contact column with dialer links for each number"""
-    if not contact_str:
-        return ""
-    
-    numbers = extract_numbers(contact_str)
-    formatted_numbers = []
-    
-    for num in numbers:
-        dialer_link = create_dialer_link(num)
-        if dialer_link:
-            formatted_numbers.append(
-                f'<a href="{dialer_link}" style="color: #1f77b4; text-decoration: none;">{num}</a>'
-            )
-        else:
-            formatted_numbers.append(num)
-    
-    return ", ".join(formatted_numbers)
+# Removed the format_contact_column function since we're displaying numbers as plain text
 # UI Components
 def display_lead_timeline(lead_id: str, lead_name: str, lead_phone: str):
     """Display timeline of activities for a lead"""
@@ -902,14 +878,22 @@ def display_lead_analytics(leads_df: pd.DataFrame, activities_df: pd.DataFrame):
             st.info("No activities data available.")
     else:
         st.info("No activities data available.")
-
-# --- Plots Page (Updated with direct dialing) ---
+# --- Plots Page (Fixed and Enhanced) ---
 def plots_page():
     st.header("🏡 Property Listings")
     
-    # Load data
-    df = load_plot_data().fillna("")
-    contacts_df = load_contacts()
+    try:
+        # Load data with error handling
+        df = load_plot_data().fillna("")
+        contacts_df = load_contacts()
+        
+        if df.empty:
+            st.info("No plot data available. Please add data to the Plots sheet.")
+            return
+            
+    except Exception as e:
+        st.error(f"Error loading data: {str(e)}")
+        return
 
     all_features = get_all_unique_features(df)
 
@@ -934,26 +918,28 @@ def plots_page():
         dealer_names, contact_to_name = build_name_map(df)
         selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names)
 
-        contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
+        contact_names = [""] + sorted(contacts_df["Name"].dropna().unique()) if not contacts_df.empty else [""]
         selected_saved = st.selectbox("📇 Saved Contact (by number)", contact_names)
 
     df_filtered = df.copy()
 
+    # Apply filters
     if selected_dealer:
         actual_name = selected_dealer.split(". ", 1)[1] if ". " in selected_dealer else selected_dealer
         selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
         df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
             lambda x: any(c in clean_number(x) for c in selected_contacts))]
 
-    if selected_saved:
-        row = contacts_df[contacts_df["Name"] == selected_saved].iloc[0] if not contacts_df[contacts_df["Name"] == selected_saved].empty else None
-        selected_contacts = []
-        if row is not None:
+    if selected_saved and selected_saved != "":
+        contact_row = contacts_df[contacts_df["Name"] == selected_saved]
+        if not contact_row.empty:
+            row = contact_row.iloc[0]
+            selected_contacts = []
             for col in ["Contact1", "Contact2", "Contact3"]:
                 if col in row and pd.notna(row[col]):
                     selected_contacts.extend(extract_numbers(row[col]))
-        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
-            lambda x: any(n in clean_number(x) for n in selected_contacts))]
+            df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
+                lambda x: any(n in clean_number(x) for n in selected_contacts))]
 
     if sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
@@ -1007,13 +993,12 @@ def plots_page():
     
     st.info(f"📊 Total filtered listings: {len(df_filtered)} | ✅ WhatsApp eligible: {whatsapp_eligible_count}")
     
-    # Format the Extracted Contact column with dialer links
-    display_df = df_filtered.copy()
-    if "Extracted Contact" in display_df.columns:
-        display_df["Extracted Contact"] = display_df["Extracted Contact"].apply(format_contact_column)
-    
-    # Row selection and deletion feature for main table
+    # Display the filtered data - show numbers as plain text (no HTML formatting)
     if not df_filtered.empty:
+        # Create a copy for display
+        display_df = df_filtered.copy()
+        
+        # Reset index for selection
         display_df = display_df.reset_index(drop=True)
         display_df.insert(0, "Select", False)
         
@@ -1078,14 +1063,9 @@ def plots_page():
         else:
             st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
             
-            # Format the Extracted Contact column with dialer links for duplicates
-            duplicates_display = duplicates_df.copy()
-            if "Extracted Contact" in duplicates_display.columns:
-                duplicates_display["Extracted Contact"] = duplicates_display["Extracted Contact"].apply(format_contact_column)
-            
-            # Display the styled DataFrame (color-coded)
+            # Display the duplicate DataFrame (no HTML formatting)
             st.dataframe(
-                duplicates_display,
+                duplicates_df,
                 use_container_width=True,
                 hide_index=True
             )
@@ -1152,7 +1132,7 @@ def plots_page():
         cleaned = ""
         if manual_number:
             cleaned = clean_number(manual_number)
-        elif selected_name_whatsapp:
+        elif selected_name_whatsapp and selected_name_whatsapp != "":
             contact_row = contacts_df[contacts_df["Name"] == selected_name_whatsapp]
             if not contact_row.empty:
                 row = contact_row.iloc[0]
@@ -1188,23 +1168,29 @@ def plots_page():
                 st.markdown(f"**Message {i+1}** ({len(msg)} characters):")
                 st.text_area(f"Preview Message {i+1}", msg, height=150, key=f"msg_preview_{i}")
                 
-                encoded = msg.replace(" ", "%20").replace("\n", "%0A")
+                encoded = urllib.parse.quote(msg)
                 link = f"https://wa.me/{wa_number}?text={encoded}"
                 st.markdown(f"[📩 Send Message {i+1}]({link})", unsafe_allow_html=True)
                 st.markdown("---")
+# --- Leads Page (Fixed and Enhanced) ---
 def leads_page():
     st.header("👥 Lead Management CRM")
     
-    # Load data
-    leads_df = load_leads()
-    activities_df = load_lead_activities()
-    tasks_df = load_tasks()
-    appointments_df = load_appointments()
+    try:
+        # Load data with error handling
+        leads_df = load_leads()
+        activities_df = load_lead_activities()
+        tasks_df = load_tasks()
+        appointments_df = load_appointments()
+        
+    except Exception as e:
+        st.error(f"Error loading data: {str(e)}")
+        return
     
     # Calculate metrics for dashboard
-    total_leads = len(leads_df)
+    total_leads = len(leads_df) if not leads_df.empty else 0
     
-    status_counts = leads_df["Status"].value_counts() if "Status" in leads_df.columns else pd.Series()
+    status_counts = leads_df["Status"].value_counts() if not leads_df.empty and "Status" in leads_df.columns else pd.Series()
     new_leads = status_counts.get("New", 0)
     contacted_leads = status_counts.get("Contacted", 0) + status_counts.get("Follow-up", 0)
     negotiation_leads = status_counts.get("Negotiation", 0) + status_counts.get("Offer Made", 0)
@@ -1213,7 +1199,7 @@ def leads_page():
     # Count overdue actions
     today = datetime.now().date()
     overdue_tasks = 0
-    if "Due Date" in tasks_df.columns and "Status" in tasks_df.columns:
+    if not tasks_df.empty and "Due Date" in tasks_df.columns and "Status" in tasks_df.columns:
         try:
             tasks_df["Due Date"] = pd.to_datetime(tasks_df["Due Date"], errors='coerce').dt.date
             overdue_tasks = len(tasks_df[
@@ -1273,8 +1259,10 @@ def leads_page():
             # Quick stats
             st.info("**Quick Stats**")
             st.write(f"📞 Total Activities: {len(activities_df)}")
-            st.write(f"✅ Completed Tasks: {len(tasks_df[tasks_df['Status'] == 'Completed'])}")
-            st.write(f"🔄 Active Tasks: {len(tasks_df[tasks_df['Status'] == 'In Progress'])}")
+            completed_tasks = len(tasks_df[tasks_df["Status"] == "Completed"]) if not tasks_df.empty else 0
+            st.write(f"✅ Completed Tasks: {completed_tasks}")
+            active_tasks = len(tasks_df[tasks_df["Status"] == "In Progress"]) if not tasks_df.empty else 0
+            st.write(f"🔄 Active Tasks: {active_tasks}")
             st.write(f"📅 Total Appointments: {len(appointments_df)}")
         
         with col2:
@@ -1338,12 +1326,8 @@ def leads_page():
             if assigned_filter != "All":
                 filtered_leads = filtered_leads[filtered_leads["Assigned To"] == assigned_filter]
             
-            # Display leads table with phone numbers as clickable links
-            display_df = filtered_leads.copy()
-            if "Phone" in display_df.columns:
-                display_df["Phone"] = display_df["Phone"].apply(lambda x: display_phone_with_dialer(x) if pd.notna(x) else "")
-            
-            st.markdown(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+            # Display leads table with phone numbers as plain text
+            st.dataframe(filtered_leads, use_container_width=True)
             
             # Lead actions
             if not filtered_leads.empty:
@@ -1533,7 +1517,7 @@ def leads_page():
             
             if selected_lead:
                 # Extract the ID from the selected option
-                lead_id = selected_land.split(" - ")[-1]
+                lead_id = selected_lead.split(" - ")[-1]
                 
                 # Find the lead by ID
                 lead_match = leads_df[leads_df["ID"] == lead_id]
@@ -1821,7 +1805,6 @@ def leads_page():
     
     with tab7:
         display_lead_analytics(leads_df, activities_df)
-
 # --- Main App ---
 def main():
     st.title("🏡 Al-Jazeera Real Estate CRM")
