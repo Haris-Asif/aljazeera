@@ -8,6 +8,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import vobject  # For VCF file parsing
 import tempfile
 import os
+import numpy as np
 
 # Constants
 SPREADSHEET_NAME = "Al-Jazeera"
@@ -36,9 +37,10 @@ def parse_price(price_str):
 
 def get_all_unique_features(df):
     feature_set = set()
-    for f in df["Features"].fillna("").astype(str):
-        parts = [p.strip().lower() for p in f.split(",") if p.strip()]
-        feature_set.update(parts)
+    if "Features" in df.columns:
+        for f in df["Features"].fillna("").astype(str):
+            parts = [p.strip().lower() for p in f.split(",") if p.strip()]
+            feature_set.update(parts)
     return sorted(feature_set)
 
 def fuzzy_feature_match(row_features, selected_features):
@@ -50,27 +52,58 @@ def fuzzy_feature_match(row_features, selected_features):
     return False
 
 # Google Sheets
+@st.cache_resource(show_spinner=False)
 def get_gsheet_client():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds_dict = st.secrets["gcp_service_account"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    return gspread.authorize(creds)
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds_dict = st.secrets["gcp_service_account"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"Failed to connect to Google Sheets: {str(e)}")
+        return None
 
+@st.cache_data(ttl=300, show_spinner="Loading plot data...")
 def load_plot_data():
-    sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
-    df = pd.DataFrame(sheet.get_all_records())
-    df["SheetRowNum"] = [i + 2 for i in range(len(df))]  # Start from row 2
-    return df
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return pd.DataFrame()
+            
+        sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
+        df = pd.DataFrame(sheet.get_all_records())
+        if not df.empty:
+            df["SheetRowNum"] = [i + 2 for i in range(len(df))]  # Start from row 2
+        return df
+    except Exception as e:
+        st.error(f"Error loading plot data: {str(e)}")
+        return pd.DataFrame()
 
+@st.cache_data(ttl=300, show_spinner="Loading contacts...")
 def load_contacts():
-    sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
-    return pd.DataFrame(sheet.get_all_records())
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return pd.DataFrame()
+            
+        sheet = client.open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
+        df = pd.DataFrame(sheet.get_all_records())
+        if not df.empty:
+            df["SheetRowNum"] = [i + 2 for i in range(len(df))]
+        return df
+    except Exception as e:
+        st.error(f"Error loading contacts: {str(e)}")
+        return pd.DataFrame()
 
 def add_contact_to_sheet(contact_data):
     try:
         client = get_gsheet_client()
+        if not client:
+            return False
+            
         sheet = client.open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
         sheet.append_row(contact_data)
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"Error adding contact: {str(e)}")
@@ -79,6 +112,9 @@ def add_contact_to_sheet(contact_data):
 def delete_contacts_from_sheet(row_numbers):
     try:
         client = get_gsheet_client()
+        if not client:
+            return False
+            
         sheet = client.open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
         
         valid_rows = [row_num for row_num in row_numbers if row_num > 1]
@@ -100,42 +136,58 @@ def delete_contacts_from_sheet(row_numbers):
             import time
             time.sleep(1)
             
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"Error in delete operation: {str(e)}")
         return False
 
 def filter_by_date(df, label):
-    if label == "All":
+    if df.empty or label == "All":
         return df
+        
     days_map = {"Last 7 Days": 7, "Last 15 Days": 15, "Last 30 Days": 30, "Last 2 Months": 60}
     cutoff = datetime.now() - timedelta(days=days_map.get(label, 0))
+    
     def try_parse(val):
         try:
             return datetime.strptime(val.strip(), "%Y-%m-%d %H:%M:%S")
         except:
-            return None
-    df["ParsedDate"] = df["Timestamp"].apply(try_parse)
-    return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
+            try:
+                return datetime.strptime(val.strip(), "%m/%d/%Y %H:%M:%S")
+            except:
+                return None
+                
+    if "Timestamp" in df.columns:
+        df["ParsedDate"] = df["Timestamp"].apply(try_parse)
+        return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
+    else:
+        return df
 
 def build_name_map(df):
     contact_to_name = {}
+    if df.empty or "Extracted Name" not in df.columns or "Extracted Contact" not in df.columns:
+        return [], {}
+        
     for _, row in df.iterrows():
-        name = str(row.get("Extracted Name")).strip()
-        contacts = extract_numbers(row.get("Extracted Contact"))
+        name = str(row.get("Extracted Name", "")).strip()
+        contacts = extract_numbers(row.get("Extracted Contact", ""))
         for c in contacts:
             if c and c not in contact_to_name:
                 contact_to_name[c] = name
+                
     name_groups = {}
     for c, name in contact_to_name.items():
         name_groups.setdefault(name, set()).add(c)
+        
     merged = {}
     for name, numbers in name_groups.items():
         for c in numbers:
             merged[c] = name
+            
     name_set = {}
     for _, row in df.iterrows():
-        numbers = extract_numbers(row.get("Extracted Contact"))
+        numbers = extract_numbers(row.get("Extracted Contact", ""))
         for c in numbers:
             if c in merged:
                 name_set[merged[c]] = True
@@ -202,7 +254,7 @@ def _split_blocks_for_limits(blocks, plain_limit=3000, encoded_limit=1800):
                 small = ""
                 for ln in lines:
                     cand2 = small + ln
-                    if len(cand2) > plain极限 or len(_url_encode_for_whatsapp(cand2)) > encoded_limit:
+                    if len(cand2) > plain_limit or len(_url_encode_for_whatsapp(cand2)) > encoded_limit:
                         if small:
                             chunks.append(small.rstrip())
                             small = ""
@@ -237,6 +289,9 @@ def _split_blocks_for_limits(blocks, plain_limit=3000, encoded_limit=1800):
 
 # WhatsApp message generation (sorted by Plot No asc, URL-safe chunking)
 def generate_whatsapp_messages(df):
+    if df.empty:
+        return []
+        
     # Build list of eligible rows (keep your intentional filters)
     filtered = []
     for _, row in df.iterrows():
@@ -307,6 +362,9 @@ def generate_whatsapp_messages(df):
 def delete_rows_from_sheet(row_numbers):
     try:
         client = get_gsheet_client()
+        if not client:
+            return False
+            
         sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
         
         valid_rows = [row_num for row_num in row_numbers if row_num > 1]
@@ -328,6 +386,7 @@ def delete_rows_from_sheet(row_numbers):
             import time
             time.sleep(1)
             
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"Error in delete operation: {str(e)}")
@@ -338,7 +397,14 @@ def create_duplicates_view(df):
     if df.empty:
         return None, pd.DataFrame()
     
-    # Correct usage of astype
+    # Check if required columns exist
+    required_cols = ["Sector", "Plot No", "Street No", "Plot Size"]
+    for col in required_cols:
+        if col not in df.columns:
+            st.warning(f"Cannot check duplicates: Missing column '{col}'")
+            return None, pd.DataFrame()
+    
+    # Fixed the typo: ast(str) -> astype(str)
     df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
     
     group_counts = df["GroupKey"].value_counts()
@@ -444,7 +510,8 @@ def main():
     contacts_df = load_contacts()
     
     # Add row numbers to contacts for deletion
-    contacts_df["SheetRowNum"] = [i + 2 for i in range(len(contacts_df))]
+    if not contacts_df.empty:
+        contacts_df["SheetRowNum"] = [i + 2 for i in range(len(contacts_df))]
     
     # Tab 1: Plots
     with tabs[0]:
@@ -471,7 +538,7 @@ def main():
             dealer_names, contact_to_name = build_name_map(df)
             selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names)
 
-            contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
+            contact_names = [""] + sorted(contacts_df["Name"].dropna().unique()) if not contacts_df.empty else [""]
             
             # Pre-select contact if coming from Contacts tab
             if st.session_state.selected_contact:
@@ -509,7 +576,7 @@ def main():
                 lambda x: any(c in clean_number(x) for c in selected_contacts))]
 
         if selected_saved:
-            row = contacts_df[contacts_df["Name"] == selected_saved].iloc[0] if not contacts_df[contacts_df["Name"] == selected_saved].empty else None
+            row = contacts_df[contacts_df["Name"] == selected_saved].iloc[0] if not contacts_df.empty and not contacts_df[contacts_df["Name"] == selected_saved].empty else None
             selected_contacts = []
             if row is not None:
                 for col in ["Contact1", "Contact2", "Contact3"]:
@@ -713,13 +780,12 @@ def main():
             if manual_number:
                 cleaned = clean_number(manual_number)
             elif selected_name_whatsapp:
-                contact_row = contacts_df[contacts_df["Name"] == selected_name_whatsapp]
-                if not contact_row.empty:
-                    row = contact_row.iloc[0]
+                contact_row = contacts_df[contacts_df["Name"] == selected_name_whatsapp].iloc[0] if not contacts_df.empty and not contacts_df[contacts_df["Name"] == selected_name_whatsapp].empty else None
+                if contact_row is not None:
                     numbers = []
                     for col in ["Contact1", "Contact2", "Contact3"]:
-                        if col in row and pd.notna(row[col]):
-                            numbers.append(clean_number(row[col]))
+                        if col in contact_row and pd.notna(contact_row[col]):
+                            numbers.append(clean_number(contact_row[col]))
                     cleaned = numbers[0] if numbers else ""
 
             if not cleaned:
