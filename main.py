@@ -5,6 +5,8 @@ import re
 import difflib
 from datetime import datetime, timedelta
 from oauth2client.service_account import ServiceAccountCredentials
+from collections import defaultdict
+import unicodedata
 
 # Constants
 SPREADSHEET_NAME = "Al-Jazeera"
@@ -16,14 +18,34 @@ st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
 
 # --- Helpers ---
 def clean_number(num):
+    """Extract only digits from a string"""
     return re.sub(r"[^\d]", "", str(num or ""))
 
 def extract_numbers(text):
+    """Extract all phone numbers from a string"""
     text = str(text or "")
-    parts = re.split(r"[,\s]+", text)
-    return [clean_number(p) for p in parts if clean_number(p)]
+    # Match Pakistani phone number patterns
+    patterns = [
+        r"\b03\d{2} ?\d{3} ?\d{4}\b",  # 03XX XXX XXXX
+        r"\b\d{4} ?\d{3} ?\d{3}\b",    # XXXX XXX XXX
+        r"\b\d{5} ?\d{5}\b",           # XXXXX XXXXX
+        r"\b\d{11}\b",                 # 11 consecutive digits
+    ]
+    
+    numbers = []
+    for pattern in patterns:
+        matches = re.findall(pattern, text)
+        for match in matches:
+            cleaned = clean_number(match)
+            if len(cleaned) == 11 and cleaned.startswith('03'):
+                numbers.append(cleaned)
+            elif len(cleaned) == 10 and cleaned.startswith('3'):
+                numbers.append('0' + cleaned)
+    
+    return numbers
 
 def parse_price(price_str):
+    """Parse price string into numeric value"""
     try:
         price_str = str(price_str).lower().replace(",", "").replace("cr", "00").replace("crore", "00")
         numbers = re.findall(r"\d+\.?\d*", price_str)
@@ -31,81 +53,155 @@ def parse_price(price_str):
     except:
         return None
 
+def normalize_text(text):
+    """Normalize text for consistent comparison"""
+    if not text or pd.isna(text):
+        return ""
+    # Convert to string, lowercase, and remove extra spaces
+    text = str(text).lower().strip()
+    # Remove special characters and keep only alphanumeric and spaces
+    text = re.sub(r'[^\w\s]', '', text)
+    # Normalize unicode characters
+    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
+    return text
+
 def get_all_unique_features(df):
+    """Extract all unique features from the dataset"""
     feature_set = set()
     for f in df["Features"].fillna("").astype(str):
-        parts = [p.strip().lower() for p in f.split(",") if p.strip()]
+        parts = [normalize_text(p.strip()) for p in f.split(",") if p.strip()]
         feature_set.update(parts)
     return sorted(feature_set)
 
 def fuzzy_feature_match(row_features, selected_features):
-    row_features = [f.strip().lower() for f in str(row_features or "").split(",")]
+    """Fuzzy match features with selected features"""
+    if not row_features or pd.isna(row_features):
+        return False
+        
+    row_features = [normalize_text(f.strip()) for f in str(row_features).split(",")]
+    selected_features = [normalize_text(f) for f in selected_features]
+    
     for sel in selected_features:
-        match = difflib.get_close_matches(sel.lower(), row_features, n=1, cutoff=0.7)
+        match = difflib.get_close_matches(sel, row_features, n=1, cutoff=0.7)
         if match:
             return True
     return False
 
 # Google Sheets
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_gsheet_client():
+    """Authenticate with Google Sheets API"""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = st.secrets["gcp_service_account"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_plot_data():
-    sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
-    df = pd.DataFrame(sheet.get_all_records())
-    df["SheetRowNum"] = [i + 2 for i in range(len(df))]  # Start from row 2
-    return df
+    """Load plot data from Google Sheets"""
+    try:
+        sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
+        df = pd.DataFrame(sheet.get_all_records())
+        df["SheetRowNum"] = [i + 2 for i in range(len(df))]  # Start from row 2
+        return df
+    except Exception as e:
+        st.error(f"Error loading plot data: {e}")
+        return pd.DataFrame()
 
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_contacts():
-    sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
-    return pd.DataFrame(sheet.get_all_records())
+    """Load contacts data from Google Sheets"""
+    try:
+        sheet = get_gsheet_client().open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
+        return pd.DataFrame(sheet.get_all_records())
+    except Exception as e:
+        st.error(f"Error loading contacts: {e}")
+        return pd.DataFrame()
 
 def filter_by_date(df, label):
-    if label == "All":
+    """Filter dataframe by date range"""
+    if label == "All" or df.empty:
         return df
+        
     days_map = {"Last 7 Days": 7, "Last 15 Days": 15, "Last 30 Days": 30, "Last 2 Months": 60}
     cutoff = datetime.now() - timedelta(days=days_map.get(label, 0))
+    
     def try_parse(val):
         try:
             return datetime.strptime(val.strip(), "%Y-%m-%d %H:%M:%S")
         except:
-            return None
+            try:
+                return datetime.strptime(val.strip(), "%Y-%m-%d")
+            except:
+                return None
+                
     df["ParsedDate"] = df["Timestamp"].apply(try_parse)
     return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
 
 def build_name_map(df):
-    contact_to_name = {}
-    for _, row in df.iterrows():
-        name = str(row.get("Extracted Name")).strip()
-        contacts = extract_numbers(row.get("Extracted Contact"))
-        for c in contacts:
-            if c and c not in contact_to_name:
-                contact_to_name[c] = name
-    name_groups = {}
-    for c, name in contact_to_name.items():
-        name_groups.setdefault(name, set()).add(c)
-    merged = {}
-    for name, numbers in name_groups.items():
-        for c in numbers:
-            merged[c] = name
-    name_set = {}
-    for _, row in df.iterrows():
-        numbers = extract_numbers(row.get("Extracted Contact"))
-        for c in numbers:
-            if c in merged:
-                name_set[merged[c]] = True
+    """Build mapping of dealer names to contact numbers with fuzzy matching"""
+    if df.empty:
+        return [], {}
     
-    # Create a list of dealer names with serial numbers
+    # Collect all name-contact pairs
+    name_contact_pairs = []
+    for _, row in df.iterrows():
+        name = str(row.get("Extracted Name", "")).strip()
+        contacts = extract_numbers(row.get("Extracted Contact", ""))
+        
+        if name and contacts:
+            for contact in contacts:
+                if contact:
+                    name_contact_pairs.append((name, contact))
+    
+    if not name_contact_pairs:
+        return [], {}
+    
+    # Group contacts by normalized names (case-insensitive)
+    name_to_contacts = defaultdict(set)
+    for name, contact in name_contact_pairs:
+        normalized_name = normalize_text(name)
+        if normalized_name:
+            name_to_contacts[normalized_name].add(contact)
+    
+    # Use fuzzy matching to group similar names
+    merged_groups = {}
+    all_names = list(name_to_contacts.keys())
+    
+    for name in all_names:
+        if name not in merged_groups:
+            # Find similar names
+            matches = difflib.get_close_matches(name, all_names, n=5, cutoff=0.7)
+            for match in matches:
+                if match not in merged_groups:
+                    merged_groups[match] = name
+                    # Merge contacts
+                    name_to_contacts[name].update(name_to_contacts[match])
+    
+    # Create the final mapping
+    final_mapping = {}
+    for canonical_name in set(merged_groups.values()):
+        contacts = name_to_contacts[canonical_name]
+        for contact in contacts:
+            final_mapping[contact] = canonical_name
+    
+    # Get the original name representation for display (first occurrence)
+    display_names = {}
+    for orig_name, contact in name_contact_pairs:
+        normalized = normalize_text(orig_name)
+        if normalized in set(merged_groups.values()):
+            display_names[normalized] = orig_name  # Keep the original formatting
+    
+    # Create numbered list for dropdown
     numbered_dealers = []
-    for i, name in enumerate(sorted(name_set.keys()), 1):
-        numbered_dealers.append(f"{i}. {name}")
+    for i, normalized_name in enumerate(sorted(set(merged_groups.values())), 1):
+        display_name = display_names.get(normalized_name, normalized_name)
+        numbered_dealers.append(f"{i}. {display_name}")
     
-    return numbered_dealers, merged
+    return numbered_dealers, final_mapping
 
 def sector_matches(f, c):
+    """Check if sector filter matches sector value"""
     if not f:
         return True
     f = f.replace(" ", "").upper()
@@ -113,6 +209,7 @@ def sector_matches(f, c):
     return f in c if "/" not in f else f == c
 
 def safe_dataframe(df):
+    """Create a safe copy of dataframe for display"""
     try:
         df = df.copy()
         df = df.drop(columns=["ParsedDate", "ParsedPrice"], errors="ignore")
@@ -124,7 +221,7 @@ def safe_dataframe(df):
         st.error(f"⚠️ Error displaying table: {e}")
         return pd.DataFrame()
 
-# ---------- WhatsApp utilities (split + encode aware) ----------
+# ---------- WhatsApp utilities ----------
 def _extract_int(val):
     """Extract first integer from a string; used for numeric sorting of Plot No."""
     try:
@@ -134,8 +231,7 @@ def _extract_int(val):
         return float("inf")
 
 def _url_encode_for_whatsapp(text: str) -> str:
-    """Encode minimally for wa.me URL (matching your existing approach)."""
-    # Keep same encoding style you used, so links behave consistently
+    """Encode minimally for wa.me URL"""
     return text.replace(" ", "%20").replace("\n", "%0A")
 
 def _split_blocks_for_limits(blocks, plain_limit=3000, encoded_limit=1800):
@@ -193,9 +289,9 @@ def _split_blocks_for_limits(blocks, plain_limit=3000, encoded_limit=1800):
 
     return chunks
 
-# WhatsApp message generation (sorted by Plot No asc, URL-safe chunking)
 def generate_whatsapp_messages(df):
-    # Build list of eligible rows (keep your intentional filters)
+    """Generate WhatsApp messages from filtered data"""
+    # Build list of eligible rows
     filtered = []
     for _, row in df.iterrows():
         sector = str(row.get("Sector", "")).strip()
@@ -228,7 +324,7 @@ def generate_whatsapp_messages(df):
             seen.add(key)
             unique.append(row)
 
-    # Group by (Sector, Plot Size) as before
+    # Group by (Sector, Plot Size)
     grouped = {}
     for row in unique:
         key = (row["Sector"], row["Plot Size"])
@@ -246,7 +342,6 @@ def generate_whatsapp_messages(df):
         lines = []
         for r in listings:
             if sector.startswith("I-15/"):
-                # Keep your I-15 line format but ordering still by Plot No due to sort above
                 lines.append(f"St: {r['Street No']} | P: {r['Plot No']} | S: {r['Plot Size']} | D: {r['Demand']}")
             else:
                 lines.append(f"P: {r['Plot No']} | S: {r['Plot Size']} | D: {r['Demand']}")
@@ -256,13 +351,12 @@ def generate_whatsapp_messages(df):
         blocks.append(block)
 
     # Split into URL-safe chunks
-    # Conservative caps: plain <= 3000 chars, encoded <= 1800 chars
     messages = _split_blocks_for_limits(blocks, plain_limit=3000, encoded_limit=1800)
 
     return messages
 
-# Delete rows from Google Sheet
 def delete_rows_from_sheet(row_numbers):
+    """Delete rows from Google Sheet"""
     try:
         client = get_gsheet_client()
         sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
@@ -291,16 +385,20 @@ def delete_rows_from_sheet(row_numbers):
         st.error(f"Error in delete operation: {str(e)}")
         return False
 
-# Function to create grouped view with colors for duplicate entries
 def create_duplicates_view(df):
+    """Create a view for duplicate listings with color coding"""
     if df.empty:
         return None, pd.DataFrame()
     
-    # Correct usage of astype
-    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
+    # Create a composite key for grouping
+    df["GroupKey"] = (
+        df["Sector"].astype(str) + "|" + 
+        df["Plot No"].astype(str) + "|" + 
+        df["Street No"].astype(str) + "|" + 
+        df["Plot Size"].astype(str)
+    )
     
     group_counts = df["GroupKey"].value_counts()
-    
     duplicate_groups = group_counts[group_counts >= 2].index
     duplicate_df = df[df["GroupKey"].isin(duplicate_groups)]
     
@@ -330,7 +428,14 @@ def main():
     df = load_plot_data().fillna("")
     contacts_df = load_contacts()
 
+    # Get all unique features and property types
     all_features = get_all_unique_features(df)
+    
+    # Get property types from the sheet
+    prop_type_options = ["All"]
+    if "Property Type" in df.columns:
+        prop_types = [str(v).strip() for v in df["Property Type"].dropna().astype(str).unique() if v]
+        prop_type_options.extend(sorted(prop_types))
 
     with st.sidebar:
         st.header("🔍 Filters")
@@ -339,28 +444,33 @@ def main():
         street_filter = st.text_input("Street No")
         plot_no_filter = st.text_input("Plot No")
         contact_filter = st.text_input("Phone Number (03xxxxxxxxx)")
+        
+        # Price range with no default filtering
         price_from = st.number_input("Price From (in Lacs)", min_value=0.0, value=0.0, step=1.0)
-        price_to = st.number_input("Price To (in Lacs)", min_value=0.0, value=1000.0, step=1.0)
+        price_to = st.number_input("Price To (in Lacs)", min_value=0.0, value=10000.0, step=1.0)
+        
         selected_features = st.multiselect("Select Feature(s)", options=all_features)
         date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
-
-        # NEW: Property Type filter populated from sheet
-        prop_type_options = ["All"]
-        if "Property Type" in df.columns:
-            prop_type_options += sorted([str(v).strip() for v in df["Property Type"].dropna().astype(str).unique()])
         selected_prop_type = st.selectbox("Property Type", prop_type_options)
 
+        # Build dealer name mapping
         dealer_names, contact_to_name = build_name_map(df)
         selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names)
 
+        # Get contact names
         contact_names = [""] + sorted(contacts_df["Name"].dropna().unique())
         selected_saved = st.selectbox("📇 Saved Contact (by number)", contact_names)
 
+    # Start with all data
     df_filtered = df.copy()
 
+    # Apply filters
     if selected_dealer:
         actual_name = selected_dealer.split(". ", 1)[1] if ". " in selected_dealer else selected_dealer
-        selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
+        # Normalize for comparison
+        normalized_actual_name = normalize_text(actual_name)
+        # Find all contacts associated with this dealer (exact and fuzzy matches)
+        selected_contacts = [c for c, name in contact_to_name.items() if normalize_text(name) == normalized_actual_name]
         df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
             lambda x: any(c in clean_number(x) for c in selected_contacts))]
 
@@ -376,21 +486,28 @@ def main():
 
     if sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
+    
     if plot_size_filter:
         df_filtered = df_filtered[df_filtered["Plot Size"].str.contains(plot_size_filter, case=False, na=False)]
+    
     if street_filter:
         df_filtered = df_filtered[df_filtered["Street No"].str.contains(street_filter, case=False, na=False)]
+    
     if plot_no_filter:
-        df_filtered = df_filtered[df_filtered["Plot No"].str.contains(plot_no_filter, case=False, na=False)]
+        # Enhanced plot number filter to match various formats
+        pattern = re.compile(re.escape(plot_no_filter), re.IGNORECASE)
+        df_filtered = df_filtered[df_filtered["Plot No"].apply(lambda x: bool(pattern.search(str(x))))]
+    
     if contact_filter:
         cnum = clean_number(contact_filter)
         df_filtered = df_filtered[df_filtered["Extracted Contact"].astype(str).apply(
-            lambda x: any(cnum == clean_number(p) for p in x.split(",")))]
+            lambda x: any(cnum == clean_number(p) for p in extract_numbers(x)))]
 
-    # NEW: Apply Property Type filter if selected
+    # Apply Property Type filter if selected
     if "Property Type" in df_filtered.columns and selected_prop_type and selected_prop_type != "All":
         df_filtered = df_filtered[df_filtered["Property Type"].astype(str).str.strip() == selected_prop_type]
 
+    # Parse prices and filter by price range
     df_filtered["ParsedPrice"] = df_filtered["Demand"].apply(parse_price)
     df_filtered = df_filtered[df_filtered["ParsedPrice"].notnull()]
     df_filtered = df_filtered[(df_filtered["ParsedPrice"] >= price_from) & (df_filtered["ParsedPrice"] <= price_to)]
@@ -407,7 +524,7 @@ def main():
 
     st.subheader("📋 Filtered Listings")
     
-    # Count WhatsApp eligible listings (same rules you had)
+    # Count WhatsApp eligible listings
     whatsapp_eligible_count = 0
     for _, row in df_filtered.iterrows():
         sector = str(row.get("Sector", "")).strip()
