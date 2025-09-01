@@ -203,7 +203,7 @@ def sector_matches(f, c):
     if not f:
         return True
     f = f.replace(" ", "").upper()
-    c = str(c).replace(" ", "").upper())
+    c = str(c).replace(" ", "").upper()
     return f in c if "/" not in f else f == c
 
 def safe_dataframe(df):
