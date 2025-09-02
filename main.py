@@ -72,7 +72,6 @@ class AppointmentStatus(Enum):
 
 # Streamlit setup
 st.set_page_config(page_title="Al-Jazeera Real Estate Tool", layout="wide")
-
 # --- Helpers ---
 def clean_number(num):
     return re.sub(r"[^\d]", "", str(num or ""))
@@ -106,6 +105,257 @@ def fuzzy_feature_match(row_features, selected_features):
             return True
     return False
 
+def sector_matches(f, c):
+    if not f:
+        return True
+    f = f.replace(" ", "").upper()
+    c = str(c).replace(" ", "").upper()
+    return f in c if "/" not in f else f == c
+
+def safe_dataframe(df):
+    try:
+        df = df.copy()
+        df = df.drop(columns=["ParsedDate", "ParsedPrice"], errors="ignore")
+        for col in df.columns:
+            if df[col].dtype == "object":
+                df[col] = df[col].astype(str)
+        return df
+    except Exception as e:
+        st.error(f"⚠️ Error displaying table: {e}")
+        return pd.DataFrame()
+
+def filter_by_date(df, label):
+    if df.empty or label == "All":
+        return df
+        
+    days_map = {"Last 7 Days": 7, "Last 15 Days": 15, "Last 30 Days": 30, "Last 2 Months": 60}
+    cutoff = datetime.now() - timedelta(days=days_map.get(label, 0))
+    
+    def try_parse(val):
+        try:
+            return datetime.strptime(val.strip(), "%Y-%m-%d %H:%M:%S")
+        except:
+            try:
+                return datetime.strptime(val.strip(), "%m/%d/%Y %H:%M:%S")
+            except:
+                return None
+                
+    if "Timestamp" in df.columns:
+        df["ParsedDate"] = df["Timestamp"].apply(try_parse)
+        return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
+    else:
+        return df
+
+def build_name_map(df):
+    contact_to_name = {}
+    if df.empty or "Extracted Name" not in df.columns or "Extracted Contact" not in df.columns:
+        return [], {}
+        
+    for _, row in df.iterrows():
+        name = str(row.get("Extracted Name", "")).strip()
+        contacts = extract_numbers(row.get("Extracted Contact", ""))
+        for c in contacts:
+            if c and c not in contact_to_name:
+                contact_to_name[c] = name
+                
+    name_groups = {}
+    for c, name in contact_to_name.items():
+        name_groups.setdefault(name, set()).add(c)
+        
+    merged = {}
+    for c in contact_to_name:
+        merged[c] = contact_to_name[c]
+        
+    name_set = {}
+    for _, row in df.iterrows():
+        numbers = extract_numbers(row.get("Extracted Contact", ""))
+        for c in numbers:
+            if c in merged:
+                name_set[merged[c]] = True
+    
+    # Create a list of dealer names with serial numbers
+    numbered_dealers = []
+    for i, name in enumerate(sorted(name_set.keys()), 1):
+        numbered_dealers.append(f"{i}. {name}")
+    
+    return numbered_dealers, merged
+
+def _extract_int(val):
+    """Extract first integer from a string; used for numeric sorting of Plot No."""
+    try:
+        m = re.search(r"\d+", str(val))
+        return int(m.group()) if m else float("inf")
+    except:
+        return float("inf")
+
+def _url_encode_for_whatsapp(text: str) -> str:
+    """Encode minimally for wa.me URL (matching your existing approach)."""
+    # Keep same encoding style you used, so links behave consistently
+    return text.replace(" ", "%20").replace("\n", "%0A")
+
+def _split_blocks_for_limits(blocks, plain_limit=3000, encoded_limit=1800):
+    """
+    Given a list of text blocks, accumulate them into chunks that
+    satisfy both plain text and encoded URL length limits.
+    """
+    chunks = []
+    current = ""
+
+    for block in blocks:
+        candidate = current + block
+        # Check both plain and encoded limits
+        if len(candidate) > plain_limit or len(_url_encode_for_whatsapp(candidate)) > encoded_limit:
+            if current:
+                chunks.append(current.rstrip())
+                current = ""
+
+            # If single block is still too large, split by lines
+            if len(block) > plain_limit or len(_url_encode_for_whatsapp(block)) > encoded_limit:
+                lines = block.splitlines(keepends=True)
+                small = ""
+                for ln in lines:
+                    cand2 = small + ln
+                    if len(cand2) > plain_limit or len(_url_encode_for_whatsapp(cand2)) > encoded_limit:
+                        if small:
+                            chunks.append(small.rstrip())
+                            small = ""
+                        # handle very long single line (rare): hard split
+                        if len(ln) > plain_limit or len(_url_encode_for_whatsapp(ln)) > encoded_limit:
+                            # split the line at safe slice points
+                            seg = ln
+                            while seg:
+                                # pick a safe slice size
+                                step = min(1000, len(seg))
+                                piece = seg[:step]
+                                while len(_url_encode_for_whatsapp(piece)) > encoded_limit and step > 10:
+                                    step -= 10
+                                    piece = seg[:step]
+                                chunks.append(piece.rstrip())
+                                seg = seg[step:]
+                        else:
+                            small = ln
+                    else:
+                        small = cand2
+                if small:
+                    chunks.append(small.rstrip())
+            else:
+                current = block
+        else:
+            current = candidate
+
+    if current:
+        chunks.append(current.rstrip())
+
+    return chunks
+
+def format_phone_link(phone):
+    cleaned = clean_number(phone)
+    if len(cleaned) == 10 and cleaned.startswith('3'):
+        return f"92{cleaned}"
+    elif len(cleaned) == 11 and cleaned.startswith('03'):
+        return f"92{cleaned[1:]}"
+    elif len(cleaned) == 12 and cleaned.startswith('92'):
+        return cleaned
+    else:
+        return cleaned
+
+def parse_vcf_file(vcf_file):
+    contacts = []
+    
+    try:
+        # Read the file content
+        content = vcf_file.getvalue()
+        
+        # Try to detect encoding
+        detected = chardet.detect(content)
+        encoding = detected.get('encoding', 'utf-8')
+        
+        # Try to decode with detected encoding, fallback to latin-1 if needed
+        try:
+            text_content = content.decode(encoding)
+        except UnicodeDecodeError:
+            text_content = content.decode('latin-1')
+        
+        # Split into individual vCards
+        vcard_texts = text_content.split('END:VCARD')
+        
+        for vcard_text in vcard_texts:
+            if not vcard_text.strip():
+                continue
+                
+            # Add the END:VCARD back for parsing
+            vcard_text = vcard_text.strip() + 'END:VCARD'
+            
+            # Parse individual fields
+            name = ""
+            phone = ""
+            
+            # Extract FN field (Full Name)
+            fn_match = re.search(r'FN:(.*?)(?:\n|$)', vcard_text, re.IGNORECASE)
+            if fn_match:
+                name = fn_match.group(1).strip()
+            
+            # Extract TEL;CELL field (Phone Number)
+            tel_match = re.search(r'TEL;CELL:(.*?)(?:\n|$)', vcard_text, re.IGNORECASE)
+            if not tel_match:
+                # Fallback to any TEL field
+                tel_match = re.search(r'TEL[^:]*:(.*?)(?:\n|$)', vcard_text, re.IGNORECASE)
+            
+            if tel_match:
+                phone = tel_match.group(1).strip()
+            
+            # Only add if we have at least a name or phone
+            if name or phone:
+                contacts.append({
+                    "Name": name,
+                    "Contact1": phone,
+                    "Contact2": "",
+                    "Contact3": "",
+                    "Email": "",
+                    "Address": ""
+                })
+                
+    except Exception as e:
+        st.error(f"Error parsing VCF file: {e}")
+    
+    return contacts
+
+def create_duplicates_view(df):
+    if df.empty:
+        return None, pd.DataFrame()
+    
+    # Check if required columns exist
+    required_cols = ["Sector", "Plot No", "Street No", "Plot Size"]
+    for col in required_cols:
+        if col not in df.columns:
+            st.warning(f"Cannot check duplicates: Missing column '{col}'")
+            return None, pd.DataFrame()
+    
+    # FIXED: Changed .ast() to .astype() in the line below
+    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
+    
+    group_counts = df["GroupKey"].value_counts()
+    
+    duplicate_groups = group_counts[group_counts >= 2].index
+    duplicate_df = df[df["GroupKey"].isin(duplicate_groups)]
+    
+    if duplicate_df.empty:
+        return None, duplicate_df
+    
+    duplicate_df = duplicate_df.sort_values(by="GroupKey")
+    
+    unique_groups = duplicate_df["GroupKey"].unique()
+    color_map = {}
+    colors = ["#FFCCCC", "#CCFFCC", "#CCCCFF", "#FFFFCC", "#FFCCFF", "#CCFFFF", "#FFE5CC", "#E5CCFF"]
+    
+    for i, group in enumerate(unique_groups):
+        color_map[group] = colors[i % len(colors)]
+    
+    def apply_row_color(row):
+        return [f"background-color: {color_map[row['GroupKey']]}"] * len(row)
+    
+    styled_df = duplicate_df.style.apply(apply_row_color, axis=1)
+    return styled_df, duplicate_df
 # Google Sheets
 @st.cache_resource(show_spinner=False)
 def get_gsheet_client():
@@ -462,151 +712,48 @@ def delete_contacts_from_sheet(row_numbers):
         st.error(f"Error in delete operation: {str(e)}")
         return False
 
-def filter_by_date(df, label):
-    if df.empty or label == "All":
-        return df
-        
-    days_map = {"Last 7 Days": 7, "Last 15 Days": 15, "Last 30 Days": 30, "Last 2 Months": 60}
-    cutoff = datetime.now() - timedelta(days=days_map.get(label, 0))
-    
-    def try_parse(val):
-        try:
-            return datetime.strptime(val.strip(), "%Y-%m-%d %H:%M:%S")
-        except:
-            try:
-                return datetime.strptime(val.strip(), "%m/%d/%Y %H:%M:%S")
-            except:
-                return None
-                
-    if "Timestamp" in df.columns:
-        df["ParsedDate"] = df["Timestamp"].apply(try_parse)
-        return df[df["ParsedDate"].notna() & (df["ParsedDate"] >= cutoff)]
-    else:
-        return df
-
-def build_name_map(df):
-    contact_to_name = {}
-    if df.empty or "Extracted Name" not in df.columns or "Extracted Contact" not in df.columns:
-        return [], {}
-        
-    for _, row in df.iterrows():
-        name = str(row.get("Extracted Name", "")).strip()
-        contacts = extract_numbers(row.get("Extracted Contact", ""))
-        for c in contacts:
-            if c and c not in contact_to_name:
-                contact_to_name[c] = name
-                
-    name_groups = {}
-    for c, name in contact_to_name.items():
-        name_groups.setdefault(name, set()).add(c)
-        
-    merged = {}
-    for name, numbers in name_groups.items():
-        for c in numbers:
-            merged[c] = name
+def delete_rows_from_sheet(row_numbers):
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return False
             
-    name_set = {}
-    for _, row in df.iterrows():
-        numbers = extract_numbers(row.get("Extracted Contact", ""))
-        for c in numbers:
-            if c in merged:
-                name_set[merged[c]] = True
-    
-    # Create a list of dealer names with serial numbers
-    numbered_dealers = []
-    for i, name in enumerate(sorted(name_set.keys()), 1):
-        numbered_dealers.append(f"{i}. {name}")
-    
-    return numbered_dealers, merged
-
-def sector_matches(f, c):
-    if not f:
-        return True
-    f = f.replace(" ", "").upper()
-    c = str(c).replace(" ", "").upper()
-    return f in c if "/" not in f else f == c
-
-def safe_dataframe(df):
-    try:
-        df = df.copy()
-        df = df.drop(columns=["ParsedDate", "ParsedPrice"], errors="ignore")
-        for col in df.columns:
-            if df[col].dtype == "object":
-                df[col] = df[col].astype(str)
-        return df
-    except Exception as e:
-        st.error(f"⚠️ Error displaying table: {e}")
-        return pd.DataFrame()
-
-# ---------- WhatsApp utilities (split + encode aware) ----------
-def _extract_int(val):
-    """Extract first integer from a string; used for numeric sorting of Plot No."""
-    try:
-        m = re.search(r"\d+", str(val))
-        return int(m.group()) if m else float("inf")
-    except:
-        return float("inf")
-
-def _url_encode_for_whatsapp(text: str) -> str:
-    """Encode minimally for wa.me URL (matching your existing approach)."""
-    # Keep same encoding style you used, so links behave consistently
-    return text.replace(" ", "%20").replace("\n", "%0A")
-
-def _split_blocks_for_limits(blocks, plain_limit=3000, encoded_limit=1800):
-    """
-    Given a list of text blocks, accumulate them into chunks that
-    satisfy both plain text and encoded URL length limits.
-    """
-    chunks = []
-    current = ""
-
-    for block in blocks:
-        candidate = current + block
-        # Check both plain and encoded limits
-        if len(candidate) > plain_limit or len(_url_encode_for_whatsapp(candidate)) > encoded_limit:
-            if current:
-                chunks.append(current.rstrip())
-                current = ""
-
-            # If single block is still too large, split by lines
-            if len(block) > plain_limit or len(_url_encode_for_whatsapp(block)) > encoded_limit:
-                lines = block.splitlines(keepends=True)
-                small = ""
-                for ln in lines:
-                    cand2 = small + ln
-                    if len(cand2) > plain_limit or len(_url_encode_for_whatsapp(cand2)) > encoded_limit:
-                        if small:
-                            chunks.append(small.rstrip())
-                            small = ""
-                        # handle very long single line (rare): hard split
-                        if len(ln) > plain_limit or len(_url_encode_for_whatsapp(ln)) > encoded_limit:
-                            # split the line at safe slice points
-                            seg = ln
-                            while seg:
-                                # pick a safe slice size
-                                step = min(1000, len(seg))
-                                piece = seg[:step]
-                                while len(_url_encode_for_whatsapp(piece)) > encoded_limit and step > 10:
-                                    step -= 10
-                                    piece = seg[:step]
-                                chunks.append(piece.rstrip())
-                                seg = seg[step:]
-                        else:
-                            small = ln
+        sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
+        
+        valid_rows = [row_num for row_num in row_numbers if row_num > 1]
+        if not valid_rows:
+            return True
+            
+        valid_rows.sort(reverse=True)
+        
+        for i in range(0, len(valid_rows), BATCH_SIZE):
+            batch = valid_rows[i:i+BATCH_SIZE]
+            for row_num in batch:
+                try:
+                    sheet.delete_rows(row_num)
+                    time.sleep(API_DELAY)  # Rate limiting
+                except HttpError as e:
+                    if e.resp.status == 429:
+                        st.warning("Google Sheets API quota exceeded. Waiting before retrying...")
+                        time.sleep(10)  # Wait longer if we hit quota limits
+                        try:
+                            sheet.delete_rows(row_num)
+                        except:
+                            continue
                     else:
-                        small = cand2
-                if small:
-                    chunks.append(small.rstrip())
-            else:
-                current = block
-        else:
-            current = candidate
-
-    if current:
-        chunks.append(current.rstrip())
-
-    return chunks
-
+                        st.error(f"Error deleting row {row_num}: {str(e)}")
+                        continue
+                except Exception as e:
+                    st.error(f"Error deleting row {row_num}: {str(e)}")
+                    continue
+                    
+            time.sleep(API_DELAY)
+            
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Error in delete operation: {str(e)}")
+        return False
 # WhatsApp message generation (sorted by Plot No asc, URL-safe chunking)
 def generate_whatsapp_messages(df):
     if df.empty:
@@ -678,162 +825,6 @@ def generate_whatsapp_messages(df):
 
     return messages
 
-# Delete rows from Google Sheet
-def delete_rows_from_sheet(row_numbers):
-    try:
-        client = get_gsheet_client()
-        if not client:
-            return False
-            
-        sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
-        
-        valid_rows = [row_num for row_num in row_numbers if row_num > 1]
-        if not valid_rows:
-            return True
-            
-        valid_rows.sort(reverse=True)
-        
-        for i in range(0, len(valid_rows), BATCH_SIZE):
-            batch = valid_rows[i:i+BATCH_SIZE]
-            for row_num in batch:
-                try:
-                    sheet.delete_rows(row_num)
-                    time.sleep(API_DELAY)  # Rate limiting
-                except HttpError as e:
-                    if e.resp.status == 429:
-                        st.warning("Google Sheets API quota exceeded. Waiting before retrying...")
-                        time.sleep(10)  # Wait longer if we hit quota limits
-                        try:
-                            sheet.delete_rows(row_num)
-                        except:
-                            continue
-                    else:
-                        st.error(f"Error deleting row {row_num}: {str(e)}")
-                        continue
-                except Exception as e:
-                    st.error(f"Error deleting row {row_num}: {str(e)}")
-                    continue
-                    
-            time.sleep(API_DELAY)
-            
-        st.cache_data.clear()
-        return True
-    except Exception as e:
-        st.error(f"Error in delete operation: {str(e)}")
-        return False
-
-# Function to create grouped view with colors for duplicate entries
-def create_duplicates_view(df):
-    if df.empty:
-        return None, pd.DataFrame()
-    
-    # Check if required columns exist
-    required_cols = ["Sector", "Plot No", "Street No", "Plot Size"]
-    for col in required_cols:
-        if col not in df.columns:
-            st.warning(f"Cannot check duplicates: Missing column '{col}'")
-            return None, pd.DataFrame()
-    
-    # FIXED: Changed .ast() to .astype() in the line below
-    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
-    
-    group_counts = df["GroupKey"].value_counts()
-    
-    duplicate_groups = group_counts[group_counts >= 2].index
-    duplicate_df = df[df["GroupKey"].isin(duplicate_groups)]
-    
-    if duplicate_df.empty:
-        return None, duplicate_df
-    
-    duplicate_df = duplicate_df.sort_values(by="GroupKey")
-    
-    unique_groups = duplicate_df["GroupKey"].unique()
-    color_map = {}
-    colors = ["#FFCCCC", "#CCFFCC", "#CCCCFF", "#FFFFCC", "#FFCCFF", "#CCFFFF", "#FFE5CC", "#E5CCFF"]
-    
-    for i, group in enumerate(unique_groups):
-        color_map[group] = colors[i % len(colors)]
-    
-    def apply_row_color(row):
-        return [f"background-color: {color_map[row['GroupKey']]}"] * len(row)
-    
-    styled_df = duplicate_df.style.apply(apply_row_color, axis=1)
-    return styled_df, duplicate_df
-
-# Format phone number for tel: link
-def format_phone_link(phone):
-    cleaned = clean_number(phone)
-    if len(cleaned) == 10 and cleaned.startswith('3'):
-        return f"92{cleaned}"
-    elif len(cleaned) == 11 and cleaned.startswith('03'):
-        return f"92{cleaned[1:]}"
-    elif len(cleaned) == 12 and cleaned.startswith('92'):
-        return cleaned
-    else:
-        return cleaned
-
-# Parse VCF file with better encoding handling
-def parse_vcf_file(vcf_file):
-    contacts = []
-    
-    try:
-        # Read the file content
-        content = vcf_file.getvalue()
-        
-        # Try to detect encoding
-        detected = chardet.detect(content)
-        encoding = detected.get('encoding', 'utf-8')
-        
-        # Try to decode with detected encoding, fallback to latin-1 if needed
-        try:
-            text_content = content.decode(encoding)
-        except UnicodeDecodeError:
-            text_content = content.decode('latin-1')
-        
-        # Split into individual vCards
-        vcard_texts = text_content.split('END:VCARD')
-        
-        for vcard_text in vcard_texts:
-            if not vcard_text.strip():
-                continue
-                
-            # Add the END:VCARD back for parsing
-            vcard_text = vcard_text.strip() + 'END:VCARD'
-            
-            # Parse individual fields
-            name = ""
-            phone = ""
-            
-            # Extract FN field (Full Name)
-            fn_match = re.search(r'FN:(.*?)(?:\n|$)', vcard_text, re.IGNORECASE)
-            if fn_match:
-                name = fn_match.group(1).strip()
-            
-            # Extract TEL;CELL field (Phone Number)
-            tel_match = re.search(r'TEL;CELL:(.*?)(?:\n|$)', vcard_text, re.IGNORECASE)
-            if not tel_match:
-                # Fallback to any TEL field
-                tel_match = re.search(r'TEL[^:]*:(.*?)(?:\n|$)', vcard_text, re.IGNORECASE)
-            
-            if tel_match:
-                phone = tel_match.group(1).strip()
-            
-            # Only add if we have at least a name or phone
-            if name or phone:
-                contacts.append({
-                    "Name": name,
-                    "Contact1": phone,
-                    "Contact2": "",
-                    "Contact3": "",
-                    "Email": "",
-                    "Address": ""
-                })
-                
-    except Exception as e:
-        st.error(f"Error parsing VCF file: {e}")
-    
-    return contacts
-
 # Lead Management Utilities
 def generate_lead_id():
     return f"L{int(datetime.now().timestamp())}"
@@ -886,11 +877,14 @@ def calculate_lead_score(lead_data, activities_df):
     
     return min(score, 100)  # Cap at 100
 
-def display_lead_timeline(lead_id, lead_name, lead_phone):
+def display_lead_timeline(lead_id, lead_name, lead_phone, activities_df):
     """Display timeline of activities for a lead"""
     st.subheader(f"📋 Timeline for: {lead_name}")
     
-    activities_df = load_lead_activities()
+    if activities_df.empty or "Lead ID" not in activities_df.columns:
+        st.info("No activities recorded for this lead yet.")
+        return
+    
     lead_activities = activities_df[(activities_df["Lead ID"] == lead_id)]
     
     if lead_activities.empty:
@@ -1543,7 +1537,8 @@ def main():
                         st.rerun()
         else:
             st.info("No contacts found. Add a new contact using the form above.")
-    # Tab 3: Leads Management
+    
+    # Tab 3: Leads Management (Fixed version)
     with tabs[2]:
         st.header("👥 Lead Management CRM")
         
@@ -1744,7 +1739,7 @@ def main():
                                     last_contact_date = datetime.now().date()
                                     if lead_data.get("Last Contact") and pd.notna(lead_data.get("Last Contact")):
                                         try:
-                                            last_contact_date = datetime.strptime(lead_data.get("Last Contact"), "%Y-%m-%d").date()
+                                            last_contact_date = datetime.strptime(lead_data.get("Last Contact", ""), "%Y-%m-%d").date()
                                         except:
                                             pass
                                     new_last_contact = st.date_input("Last Contact", value=last_contact_date)
@@ -1861,7 +1856,7 @@ def main():
                             }
                             
                             activities_df = pd.concat([activities_df, pd.DataFrame([new_activity])], ignore_index=True)
-                            if save_lead_activity(activities_df):
+                            if save_lead_activities(activities_df):
                                 st.success("Lead added successfully!")
                                 st.rerun()
                             else:
@@ -1892,8 +1887,8 @@ def main():
                         lead_name = lead_data["Name"]
                         lead_phone = lead_data["Phone"]
                         
-                        # Display timeline
-                        display_lead_timeline(lead_id, lead_name, lead_phone)
+                        # Display timeline with proper error handling
+                        display_lead_timeline(lead_id, lead_name, lead_phone, activities_df)
                         
                         # Add new activity
                         st.subheader("Add New Activity")
@@ -1935,7 +1930,7 @@ def main():
                                     activities_df = pd.concat([activities_df, pd.DataFrame([new_activity])], ignore_index=True)
                                     
                                     # Save to Google Sheets
-                                    if save_lead_activity(activities_df):
+                                    if save_lead_activities(activities_df):
                                         # Update last contact date in leads sheet
                                         idx = leads_df[leads_df["ID"] == lead_id].index
                                         if len(idx) > 0:
@@ -2007,58 +2002,58 @@ def main():
                                 st.rerun()
                             else:
                                 st.error("Failed to add task. Please try again.")
-                
-                # Display tasks
-                st.subheader("All Tasks")
-                
-                # Filter tasks
-                task_status_filter = st.selectbox("Filter by Status", 
-                                                options=["All", "Not Started", "In Progress", "Completed"],
-                                                key="task_status_filter")
-                
-                filtered_tasks = tasks_df.copy()
-                if task_status_filter != "All" and "Status" in filtered_tasks.columns:
-                    filtered_tasks = filtered_tasks[filtered_tasks["Status"] == task_status_filter]
-                
-                if filtered_tasks.empty:
-                    st.info("No tasks found.")
-                else:
-                    for _, task in filtered_tasks.iterrows():
-                        with st.expander(f"{task['Title']} - {task['Status']}"):
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.write(f"**Due Date:** {task.get('Due Date', 'N/A')}")
-                                st.write(f"**Priority:** {task.get('Priority', 'N/A')}")
-                                st.write(f"**Assigned To:** {task.get('Assigned To', 'N/A')}")
-                            with col2:
-                                st.write(f"**Related To:** {task.get('Related To', 'N/A')}")
-                                st.write(f"**Status:** {task.get('Status', 'N/A')}")
-                                if task.get('Status') == "Completed" and task.get('Completed Date'):
-                                    st.write(f"**Completed On:** {task['Completed Date']}")
-                            
-                            st.write(f"**Description:** {task.get('Description', 'No description')}")
-                            
-                            # Update task status
-                            current_status = task.get('Status', 'Not Started')
-                            new_status = st.selectbox("Update Status", 
-                                                    options=["Not Started", "In Progress", "Completed"],
-                                                    index=["Not Started", "In Progress", "Completed"].index(current_status) if current_status in ["Not Started", "In Progress", "Completed"] else 0,
-                                                    key=f"status_{task['ID']}")
-                            
-                            if st.button("Update", key=f"update_{task['ID']}"):
-                                idx = tasks_df[tasks_df["ID"] == task['ID']].index
-                                if len(idx) > 0:
-                                    idx = idx[0]
-                                    tasks_df.at[idx, "Status"] = new_status
-                                    if new_status == "Completed":
-                                        tasks_df.at[idx, "Completed Date"] = datetime.now().strftime("%Y-%m-%d")
-                                    if save_tasks(tasks_df):
-                                        st.success("Task updated successfully!")
-                                        st.rerun()
-                                    else:
-                                        st.error("Failed to update task. Please try again.")
+            
+            # Display tasks
+            st.subheader("All Tasks")
+            
+            # Filter tasks
+            task_status_filter = st.selectbox("Filter by Status", 
+                                            options=["All", "Not Started", "In Progress", "Completed"],
+                                            key="task_status_filter")
+            
+            filtered_tasks = tasks_df.copy()
+            if task_status_filter != "All" and "Status" in filtered_tasks.columns:
+                filtered_tasks = filtered_tasks[filtered_tasks["Status"] == task_status_filter]
+            
+            if filtered_tasks.empty:
+                st.info("No tasks found.")
+            else:
+                for _, task in filtered_tasks.iterrows():
+                    with st.expander(f"{task['Title']} - {task['Status']}"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**Due Date:** {task.get('Due Date', 'N/A')}")
+                            st.write(f"**Priority:** {task.get('Priority', 'N/A')}")
+                            st.write(f"**Assigned To:** {task.get('Assigned To', 'N/A')}")
+                        with col2:
+                            st.write(f"**Related To:** {task.get('Related To', 'N/A')}")
+                            st.write(f"**Status:** {task.get('Status', 'N/A')}")
+                            if task.get('Status') == "Completed" and task.get('Completed Date'):
+                                st.write(f"**Completed On:** {task['Completed Date']}")
+                        
+                        st.write(f"**Description:** {task.get('Description', 'No description')}")
+                        
+                        # Update task status
+                        current_status = task.get('Status', 'Not Started')
+                        new_status = st.selectbox("Update Status", 
+                                                options=["Not Started", "In Progress", "Completed"],
+                                                index=["Not Started", "In Progress", "Completed"].index(current_status) if current_status in ["Not Started", "In Progress", "Completed"] else 0,
+                                                key=f"status_{task['ID']}")
+                        
+                        if st.button("Update", key=f"update_{task['ID']}"):
+                            idx = tasks_df[tasks_df["ID"] == task['ID']].index
+                            if len(idx) > 0:
+                                idx = idx[0]
+                                tasks_df.at[idx, "Status"] = new_status
+                                if new_status == "Completed":
+                                    tasks_df.at[idx, "Completed Date"] = datetime.now().strftime("%Y-%m-%d")
+                                if save_tasks(tasks_df):
+                                    st.success("Task updated successfully!")
+                                    st.rerun()
                                 else:
-                                    st.error("Task not found in database. Please try again.")
+                                    st.error("Failed to update task. Please try again.")
+                            else:
+                                st.error("Task not found in database. Please try again.")
         
         with lead_tabs[5]:
             st.subheader("Appointments")
@@ -2081,7 +2076,7 @@ def main():
                             related_id = st.selectbox("Select Lead", options=lead_options)
                         else:
                             related_id = st.text_input("Related ID")
-                        status = st.selectbox("Status", options=["Scheduled", "Confirmed", "Completed", "Cancelled"])
+                        status = st.selectbox("Status", options["Scheduled", "Confirmed", "Completed", "Cancelled"])
                         location = st.text_input("Location", placeholder="Meeting location")
                     
                     description = st.text_area("Description")
@@ -2117,56 +2112,56 @@ def main():
                                 st.rerun()
                             else:
                                 st.error("Failed to add appointment. Please try again.")
-                
-                # Display appointments
-                st.subheader("All Appointments")
-                
-                # Filter appointments
-                appointment_status_filter = st.selectbox("Filter by Status", 
-                                                       options=["All", "Scheduled", "Confirmed", "Completed", "Cancelled"],
-                                                       key="appointment_status_filter")
-                
-                filtered_appointments = appointments_df.copy()
-                if appointment_status_filter != "All" and "Status" in filtered_appointments.columns:
-                    filtered_appointments = filtered_appointments[filtered_appointments["Status"] == appointment_status_filter]
-                
-                if filtered_appointments.empty:
-                    st.info("No appointments found.")
-                else:
-                    for _, appointment in filtered_appointments.iterrows():
-                        with st.expander(f"{appointment['Title']} - {appointment['Status']}"):
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.write(f"**Date:** {appointment.get('Date', 'N/A')}")
-                                st.write(f"**Time:** {appointment.get('Time', 'N/A')}")
-                                st.write(f"**Duration:** {appointment.get('Duration', 'N/A')} minutes")
-                                st.write(f"**Location:** {appointment.get('Location', 'N/A')}")
-                            with col2:
-                                st.write(f"**Related To:** {appointment.get('Related To', 'N/A')}")
-                                st.write(f"**Status:** {appointment.get('Status', 'N/A')}")
-                                st.write(f"**Attendees:** {appointment.get('Attendees', 'N/A')}")
-                            
-                            st.write(f"**Description:** {appointment.get('Description', 'No description')}")
-                            
-                            # Update appointment status
-                            current_status = appointment.get('Status', 'Scheduled')
-                            new_status = st.selectbox("Update Status", 
-                                                    options=["Scheduled", "Confirmed", "Completed", "Cancelled"],
-                                                    index=["Scheduled", "Confirmed", "Completed", "Cancelled"].index(current_status) if current_status in ["Scheduled", "Confirmed", "Completed", "Cancelled"] else 0,
-                                                    key=f"status_{appointment['ID']}")
-                            
-                            if st.button("Update", key=f"update_{appointment['ID']}"):
-                                idx = appointments_df[appointments_df["ID"] == appointment['ID']].index
-                                if len(idx) > 0:
-                                    idx = idx[0]
-                                    appointments_df.at[idx, "Status"] = new_status
-                                    if save_appointments(appointments_df):
-                                        st.success("Appointment updated successfully!")
-                                        st.rerun()
-                                    else:
-                                        st.error("Failed to update appointment. Please try again.")
+            
+            # Display appointments
+            st.subheader("All Appointments")
+            
+            # Filter appointments
+            appointment_status_filter = st.selectbox("Filter by Status", 
+                                                   options=["All", "Scheduled", "Confirmed", "Completed", "Cancelled"],
+                                                   key="appointment_status_filter")
+            
+            filtered_appointments = appointments_df.copy()
+            if appointment_status_filter != "All" and "Status" in filtered_appointments.columns:
+                filtered_appointments = filtered_appointments[filtered_appointments["Status"] == appointment_status_filter]
+            
+            if filtered_appointments.empty:
+                st.info("No appointments found.")
+            else:
+                for _, appointment in filtered_appointments.iterrows():
+                    with st.expander(f"{appointment['Title']} - {appointment['Status']}"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**Date:** {appointment.get('Date', 'N/A')}")
+                            st.write(f"**Time:** {appointment.get('Time', 'N/A')}")
+                            st.write(f"**Duration:** {appointment.get('Duration', 'N/A')} minutes")
+                            st.write(f"**Location:** {appointment.get('Location', 'N/A')}")
+                        with col2:
+                            st.write(f"**Related To:** {appointment.get('Related To', 'N/A')}")
+                            st.write(f"**Status:** {appointment.get('Status', 'N/A')}")
+                            st.write(f"**Attendees:** {appointment.get('Attendees', 'N/A')}")
+                        
+                        st.write(f"**Description:** {appointment.get('Description', 'No description')}")
+                        
+                        # Update appointment status
+                        current_status = appointment.get('Status', 'Scheduled')
+                        new_status = st.selectbox("Update Status", 
+                                                options=["Scheduled", "Confirmed", "Completed", "Cancelled"],
+                                                index=["Scheduled", "Confirmed", "Completed", "Cancelled"].index(current_status) if current_status in ["Scheduled", "Confirmed", "Completed", "Cancelled"] else 0,
+                                                key=f"status_{appointment['ID']}")
+                        
+                        if st.button("Update", key=f"update_{appointment['ID']}"):
+                            idx = appointments_df[appointments_df["ID"] == appointment['ID']].index
+                            if len(idx) > 0:
+                                idx = idx[0]
+                                appointments_df.at[idx, "Status"] = new_status
+                                if save_appointments(appointments_df):
+                                    st.success("Appointment updated successfully!")
+                                    st.rerun()
                                 else:
-                                    st.error("Appointment not found in database. Please try again.")
+                                    st.error("Failed to update appointment. Please try again.")
+                            else:
+                                st.error("Appointment not found in database. Please try again.")
         
         with lead_tabs[6]:
             display_lead_analytics(leads_df, activities_df)
