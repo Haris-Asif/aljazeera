@@ -744,7 +744,7 @@ def delete_rows_from_sheet(row_numbers):
                         st.error(f"Error deleting row {row_num}: {str(e)}")
                         continue
                 except Exception as e:
-                    st.error(f"Error deleting row {row_num": {str(e)}")
+                    st.error(f"Error deleting row {row_num}: {str(e)}")
                     continue
                     
             time.sleep(API_DELAY)
