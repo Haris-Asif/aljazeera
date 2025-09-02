@@ -181,33 +181,42 @@ def load_leads():
         return pd.DataFrame()
 
 @st.cache_data(ttl=300, show_spinner="Loading lead activities...")
+
+@st.cache_data(ttl=300, show_spinner="Loading lead activities...")
 def load_lead_activities():
+    """
+    Load lead activities from Google Sheets and ensure expected schema.
+    Returns a DataFrame with guaranteed columns to avoid KeyError in other parts.
+    """
+    headers = ["ID", "Timestamp", "Lead ID", "Lead Name", "Lead Phone", "Activity Type",
+               "Details", "Next Steps", "Follow-up Date", "Duration", "Outcome"]
     try:
         client = get_gsheet_client()
         if not client:
-            return pd.DataFrame()
-            
-        # Check if activities sheet exists, create if not
+            return pd.DataFrame(columns=headers)
+
         try:
             sheet = client.open(SPREADSHEET_NAME).worksheet(ACTIVITIES_SHEET)
         except gspread.exceptions.WorksheetNotFound:
-            # Create the sheet with headers
             spreadsheet = client.open(SPREADSHEET_NAME)
             sheet = spreadsheet.add_worksheet(title=ACTIVITIES_SHEET, rows=100, cols=20)
-            headers = [
-                "ID", "Timestamp", "Lead ID", "Lead Name", "Lead Phone", "Activity Type", 
-                "Details", "Next Steps", "Follow-up Date", "Duration", "Outcome"
-            ]
             sheet.append_row(headers)
             return pd.DataFrame(columns=headers)
-            
-        df = pd.DataFrame(sheet.get_all_records())
-        return df
-    except Exception as e:
-        st.error(f"Error loading lead activities: {str(e)}")
-        return pd.DataFrame()
 
-@st.cache_data(ttl=300, show_spinner="Loading tasks...")
+        df = pd.DataFrame(sheet.get_all_records())
+
+        # Ensure all expected columns exist
+        for col in headers:
+            if col not in df.columns:
+                df[col] = ""
+
+        # Keep only expected columns in consistent order
+        return df[headers]
+    except Exception as e:
+        logger.error(f"Error loading lead activities: {e}", exc_info=True)
+        # Don't raise — return an empty but correctly shaped DataFrame
+        return pd.DataFrame(columns=headers)
+
 def load_tasks():
     try:
         client = get_gsheet_client()
@@ -847,78 +856,116 @@ def generate_task_id():
 def generate_appointment_id():
     return f"AP{int(datetime.now().timestamp())}"
 
+
 def calculate_lead_score(lead_data, activities_df):
-    """Calculate lead score based on various factors"""
-    score = 0
-    
-    # Score based on status
-    status_scores = {
-        LeadStatus.NEW.value: 10,
-        LeadStatus.CONTACTED.value: 20,
-        LeadStatus.FOLLOW_UP.value: 30,
-        LeadStatus.MEETING_SCHEDULED.value: 50,
-        LeadStatus.NEGOTIATION.value: 70,
-        LeadStatus.OFFER_MADE.value: 80,
-        LeadStatus.DEAL_CLOSED.value: 100,
-        LeadStatus.NOT_INTERESTED.value: 0
-    }
-    score += status_scores.get(lead_data.get("Status", "New"), 10)
-    
-    # Score based on priority
-    priority_scores = {
-        Priority.LOW.value: 5, 
-        Priority.MEDIUM.value: 10, 
-        Priority.HIGH.value: 20
-    }
-    score += priority_scores.get(lead_data.get("Priority", "Low"), 5)
-    
-    # Score based on activities count
-    lead_activities = activities_df[activities_df["Lead ID"] == lead_data.get("ID", "")]
-    score += min(len(lead_activities) * 5, 30)  # Max 30 points for activities
-    
-    # Score based on budget
-    if lead_data.get("Budget") and str(lead_data.get("Budget")).isdigit():
-        budget = int(lead_data.get("Budget"))
-        if budget > 5000000:  # Above 50 lakhs
-            score += 20
-        elif budget > 2000000:  # Above 20 lakhs
-            score += 10
-    
-    return min(score, 100)  # Cap at 100
+    """
+    Calculate lead score based on status, priority, activities and budget.
+    This implementation is defensive: it tolerates missing columns and malformed data.
+    """
+    try:
+        score = 0
+
+        status_scores = {
+            LeadStatus.NEW.value: 10,
+            LeadStatus.CONTACTED.value: 20,
+            LeadStatus.FOLLOW_UP.value: 30,
+            LeadStatus.MEETING_SCHEDULED.value: 50,
+            LeadStatus.NEGOTIATION.value: 70,
+            LeadStatus.OFFER_MADE.value: 80,
+            LeadStatus.DEAL_CLOSED.value: 100,
+            LeadStatus.NOT_INTERESTED.value: 0
+        }
+        score += status_scores.get(str(lead_data.get("Status", "New")), 10)
+
+        priority_scores = {
+            Priority.LOW.value: 5,
+            Priority.MEDIUM.value: 10,
+            Priority.HIGH.value: 20
+        }
+        score += priority_scores.get(str(lead_data.get("Priority", "Low")), 5)
+
+        # Activities count (defensive)
+        try:
+            act_count = 0
+            if isinstance(activities_df, pd.DataFrame) and "Lead ID" in activities_df.columns:
+                act_count = int(len(activities_df[activities_df["Lead ID"] == lead_data.get("ID", "")]))
+            score += min(act_count * 5, 30)
+        except Exception:
+            # If anything goes wrong counting activities, ignore (do not break scoring)
+            logger.debug("Could not compute activity-based score", exc_info=True)
+
+        # Budget contribution (defensive parsing)
+        try:
+            budget = lead_data.get("Budget", 0)
+            # Some leads may have budget as string like '5000000' or with commas
+            if isinstance(budget, str):
+                budget_clean = re.sub(r"[^0-9\.]", "", budget)
+                budget_val = float(budget_clean) if budget_clean else 0.0
+            elif isinstance(budget, (int, float)):
+                budget_val = float(budget)
+            else:
+                budget_val = 0.0
+
+            if budget_val > 5000000:
+                score += 20
+            elif budget_val > 2000000:
+                score += 10
+        except Exception:
+            logger.debug("Could not parse budget for scoring", exc_info=True)
+
+        return min(int(score), 100)
+    except Exception as e:
+        logger.error(f"Error calculating lead score: {e}", exc_info=True)
+        return 0
+
 
 def display_lead_timeline(lead_id, lead_name, lead_phone):
-    """Display timeline of activities for a lead"""
-    st.subheader(f"📋 Timeline for: {lead_name}")
-    
-    activities_df = load_lead_activities()
-    lead_activities = activities_df[(activities_df["Lead ID"] == lead_id)]
-    
+    """Display timeline of activities for a lead (defensive and robust)."""
+    st.subheader(f"📋 Timeline for: {lead_name or lead_phone or lead_id}")
+    try:
+        activities_df = load_lead_activities()
+    except Exception as e:
+        logger.error(f"Failed to load activities for timeline: {e}", exc_info=True)
+        st.error("⚠️ Unable to load activities.")
+        return
+
+    # Ensure dataframe has the expected column before indexing
+    if activities_df.empty or "Lead ID" not in activities_df.columns:
+        st.info("No activities recorded for this lead yet.")
+        return
+
+    # Select activities for this lead defensively
+    try:
+        lead_activities = activities_df[activities_df["Lead ID"] == lead_id].copy()
+    except Exception as e:
+        logger.error(f"Error filtering activities by Lead ID: {e}", exc_info=True)
+        st.info("No activities recorded for this lead yet.")
+        return
+
     if lead_activities.empty:
         st.info("No activities recorded for this lead yet.")
         return
-    
-    lead_activities = lead_activities.sort_values("Timestamp", ascending=False)
-    
+
+    # Normalize/parse timestamp for sorting/display
+    lead_activities["ParsedTimestamp"] = pd.to_datetime(lead_activities.get("Timestamp", None), errors="coerce")
+    lead_activities = lead_activities.sort_values(by="ParsedTimestamp", ascending=False)
+
     for _, activity in lead_activities.iterrows():
         with st.container():
             col1, col2 = st.columns([1, 4])
-            
             with col1:
-                timestamp = activity["Timestamp"]
-                if isinstance(timestamp, str):
+                ts = activity.get("ParsedTimestamp")
+                if pd.notnull(ts):
                     try:
-                        timestamp = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
-                    except ValueError:
-                        pass
-                
-                if isinstance(timestamp, datetime):
-                    st.write(timestamp.strftime("%b %d, %Y"))
-                    st.write(timestamp.strftime("%I:%M %p"))
+                        st.write(ts.strftime("%b %d, %Y"))
+                        st.write(ts.strftime("%I:%M %p"))
+                    except Exception:
+                        st.write(str(activity.get("Timestamp", "")))
                 else:
-                    st.write(str(timestamp))
-            
+                    st.write(str(activity.get("Timestamp", "")))
+
             with col2:
-                activity_type = activity["Activity Type"]
+                activity_type = activity.get("Activity Type", "Note")
                 color_map = {
                     ActivityType.CALL.value: "#E3F2FD",
                     ActivityType.MEETING.value: "#E8F5E9",
@@ -927,7 +974,6 @@ def display_lead_timeline(lead_id, lead_name, lead_phone):
                     ActivityType.SITE_VISIT.value: "#E0F2F1",
                     ActivityType.STATUS_UPDATE.value: "#F3E5F5"
                 }
-                
                 color = color_map.get(activity_type, "#F5F5F5")
                 icon = "📞" if activity_type == ActivityType.CALL.value else \
                        "👥" if activity_type == ActivityType.MEETING.value else \
@@ -935,24 +981,19 @@ def display_lead_timeline(lead_id, lead_name, lead_phone):
                        "💬" if activity_type == ActivityType.WHATSAPP.value else \
                        "🏠" if activity_type == ActivityType.SITE_VISIT.value else \
                        "🔄" if activity_type == ActivityType.STATUS_UPDATE.value else "📝"
-                
+
                 st.markdown(f"**{icon} {activity_type}**")
-                st.markdown(
-                    f"""<div style="background-color: {color}; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
-                    <p>{activity['Details']}</p>
-                    </div>""", 
-                    unsafe_allow_html=True
-                )
-                
-                if activity["Next Steps"] and pd.notna(activity["Next Steps"]):
-                    st.markdown(f"**Next Steps:** {activity['Next Steps']}")
-                
-                if activity["Follow-up Date"] and pd.notna(activity["Follow-up Date"]):
-                    st.markdown(f"**Follow-up:** {activity['Follow-up Date']}")
-                
-                if activity["Outcome"] and pd.notna(activity["Outcome"]):
-                    st.markdown(f"**Outcome:** {activity['Outcome']}")
-            
+                details_html = f"""<div style="background-color: {color}; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
+                <p>{activity.get('Details', '')}</p>
+                </div>"""
+                st.markdown(details_html, unsafe_allow_html=True)
+
+                # Optional fields (display if present and not null)
+                for label, colname in [("Next Steps", "Next Steps"), ("Follow-up", "Follow-up Date"), ("Outcome", "Outcome")]:
+                    val = activity.get(colname)
+                    if val and pd.notna(val):
+                        st.markdown(f"**{label}:** {val}")
+
             st.markdown("---")
 
 def display_lead_analytics(leads_df, activities_df):
