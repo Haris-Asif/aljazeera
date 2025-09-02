@@ -744,7 +744,7 @@ def delete_rows_from_sheet(row_numbers):
                         st.error(f"Error deleting row {row_num}: {str(e)}")
                         continue
                 except Exception as e:
-                    st.error(f"Error deleting row {row_num}: {str(e)}")
+                    st.error(f"Error deleting row {row_num": {str(e)}")
                     continue
                     
             time.sleep(API_DELAY)
@@ -1537,7 +1537,6 @@ def main():
                         st.rerun()
         else:
             st.info("No contacts found. Add a new contact using the form above.")
-    
     # Tab 3: Leads Management (Fixed version)
     with tabs[2]:
         st.header("👥 Lead Management CRM")
@@ -1755,7 +1754,8 @@ def main():
                                     new_location = st.text_input("Location Preference", value=lead_data.get("Location Preference", ""))
                                     new_notes = st.text_area("Notes", value=lead_data.get("Notes", ""))
                                 
-                                if st.form_submit_button("Update Lead"):
+                                submit_button = st.form_submit_button("Update Lead")
+                                if submit_button:
                                     # Update the lead in the dataframe
                                     idx = leads_df[leads_df["ID"] == lead_id].index
                                     if len(idx) > 0:
@@ -1775,6 +1775,8 @@ def main():
                                         # Save to Google Sheets
                                         if save_leads(leads_df):
                                             st.success("Lead updated successfully!")
+                                            # Clear cache to refresh data
+                                            st.cache_data.clear()
                                             st.rerun()
                                         else:
                                             st.error("Failed to update lead. Please try again.")
@@ -1807,7 +1809,8 @@ def main():
                 notes = st.text_area("Notes", placeholder="Any additional information about the lead")
                 assigned_to = st.text_input("Assigned To", value="Current User", placeholder="Agent name")
                 
-                if st.form_submit_button("Add Lead"):
+                submit_button = st.form_submit_button("Add Lead")
+                if submit_button:
                     if not name or not phone:
                         st.error("Name and Phone are required fields!")
                     else:
@@ -1858,6 +1861,8 @@ def main():
                             activities_df = pd.concat([activities_df, pd.DataFrame([new_activity])], ignore_index=True)
                             if save_lead_activities(activities_df):
                                 st.success("Lead added successfully!")
+                                # Clear cache to refresh data
+                                st.cache_data.clear()
                                 st.rerun()
                             else:
                                 st.error("Lead added but failed to create activity. Please check activities sheet.")
@@ -1907,7 +1912,8 @@ def main():
                             
                             details = st.text_area("Details*", placeholder="What was discussed?")
                             
-                            if st.form_submit_button("Add Activity"):
+                            submit_button = st.form_submit_button("Add Activity")
+                            if submit_button:
                                 if not details:
                                     st.error("Details are required!")
                                 else:
@@ -1942,6 +1948,8 @@ def main():
                                             
                                             if save_leads(leads_df):
                                                 st.success("Activity added successfully!")
+                                                # Clear cache to refresh data
+                                                st.cache_data.clear()
                                                 st.rerun()
                                             else:
                                                 st.error("Activity added but failed to update lead. Please check leads sheet.")
@@ -1974,7 +1982,9 @@ def main():
                     
                     description = st.text_area("Description")
                     assigned_to = st.text_input("Assigned To", value="Current User")
-                    if st.form_submit_button("Add Task"):
+                    
+                    submit_button = st.form_submit_button("Add Task")
+                    if submit_button:
                         if not task_title:
                             st.error("Task title is required!")
                         else:
@@ -1999,6 +2009,8 @@ def main():
                             # Save to Google Sheets
                             if save_tasks(tasks_df):
                                 st.success("Task added successfully!")
+                                # Clear cache to refresh data
+                                st.cache_data.clear()
                                 st.rerun()
                             else:
                                 st.error("Failed to add task. Please try again.")
@@ -2049,6 +2061,8 @@ def main():
                                     tasks_df.at[idx, "Completed Date"] = datetime.now().strftime("%Y-%m-%d")
                                 if save_tasks(tasks_df):
                                     st.success("Task updated successfully!")
+                                    # Clear cache to refresh data
+                                    st.cache_data.clear()
                                     st.rerun()
                                 else:
                                     st.error("Failed to update task. Please try again.")
@@ -2076,13 +2090,15 @@ def main():
                             related_id = st.selectbox("Select Lead", options=lead_options)
                         else:
                             related_id = st.text_input("Related ID")
-                        status = st.selectbox("Status", options["Scheduled", "Confirmed", "Completed", "Cancelled"])
+                        status_options = ["Scheduled", "Confirmed", "Completed", "Cancelled"]
+                        status = st.selectbox("Status", options=status_options)
                         location = st.text_input("Location", placeholder="Meeting location")
                     
                     description = st.text_area("Description")
                     attendees = st.text_input("Attendees", placeholder="Names of attendees")
                     
-                    if st.form_submit_button("Add Appointment"):
+                    submit_button = st.form_submit_button("Add Appointment")
+                    if submit_button:
                         if not appointment_title:
                             st.error("Appointment title is required!")
                         else:
@@ -2109,6 +2125,8 @@ def main():
                             # Save to Google Sheets
                             if save_appointments(appointments_df):
                                 st.success("Appointment added successfully!")
+                                # Clear cache to refresh data
+                                st.cache_data.clear()
                                 st.rerun()
                             else:
                                 st.error("Failed to add appointment. Please try again.")
@@ -2157,6 +2175,8 @@ def main():
                                 appointments_df.at[idx, "Status"] = new_status
                                 if save_appointments(appointments_df):
                                     st.success("Appointment updated successfully!")
+                                    # Clear cache to refresh data
+                                    st.cache_data.clear()
                                     st.rerun()
                                 else:
                                     st.error("Failed to update appointment. Please try again.")
