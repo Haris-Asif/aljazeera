@@ -734,7 +734,8 @@ def create_duplicates_view(df):
             st.warning(f"Cannot check duplicates: Missing column '{col}'")
             return None, pd.DataFrame()
     
-    df["GroupKey"] = df["Sector"].ast(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
+    # FIXED: Changed .ast() to .astype() in the line below
+    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
     
     group_counts = df["GroupKey"].value_counts()
     
@@ -1549,7 +1550,11 @@ def main():
         # Calculate metrics for dashboard
         total_leads = len(leads_df) if not leads_df.empty else 0
         
-        status_counts = leads_df["Status"].value_counts() if not leads_df.empty and "Status" in leads_df.columns else pd.Series()
+        # Initialize counts safely
+        status_counts = pd.Series()
+        if not leads_df.empty and "Status" in leads_df.columns:
+            status_counts = leads_df["Status"].value_counts()
+        
         new_leads = status_counts.get("New", 0)
         contacted_leads = status_counts.get("Contacted", 0) + status_counts.get("Follow-up", 0)
         negotiation_leads = status_counts.get("Negotiation", 0) + status_counts.get("Offer Made", 0)
@@ -1676,13 +1681,13 @@ def main():
                 
                 # Apply filters
                 filtered_leads = leads_df.copy()
-                if status_filter != "All":
+                if status_filter != "All" and "Status" in filtered_leads.columns:
                     filtered_leads = filtered_leads[filtered_leads["Status"] == status_filter]
-                if priority_filter != "All":
+                if priority_filter != "All" and "Priority" in filtered_leads.columns:
                     filtered_leads = filtered_leads[filtered_leads["Priority"] == priority_filter]
-                if source_filter != "All":
+                if source_filter != "All" and "Source" in filtered_leads.columns:
                     filtered_leads = filtered_leads[filtered_leads["Source"] == source_filter]
-                if assigned_filter != "All":
+                if assigned_filter != "All" and "Assigned To" in filtered_leads.columns:
                     filtered_leads = filtered_leads[filtered_leads["Assigned To"] == assigned_filter]
                 
                 # Display leads table
@@ -1974,8 +1979,7 @@ def main():
                     
                     description = st.text_area("Description")
                     assigned_to = st.text_input("Assigned To", value="Current User")
-                    
-                    if st.form_submit_button("Add Task"):
+                                        if st.form_submit_button("Add Task"):
                         if not task_title:
                             st.error("Task title is required!")
                         else:
@@ -2013,7 +2017,7 @@ def main():
                                                 key="task_status_filter")
                 
                 filtered_tasks = tasks_df.copy()
-                if task_status_filter != "All":
+                if task_status_filter != "All" and "Status" in filtered_tasks.columns:
                     filtered_tasks = filtered_tasks[filtered_tasks["Status"] == task_status_filter]
                 
                 if filtered_tasks.empty:
@@ -2023,21 +2027,22 @@ def main():
                         with st.expander(f"{task['Title']} - {task['Status']}"):
                             col1, col2 = st.columns(2)
                             with col1:
-                                st.write(f"**Due Date:** {task['Due Date']}")
-                                st.write(f"**Priority:** {task['Priority']}")
-                                st.write(f"**Assigned To:** {task['Assigned To']}")
+                                st.write(f"**Due Date:** {task.get('Due Date', 'N/A')}")
+                                st.write(f"**Priority:** {task.get('Priority', 'N/A')}")
+                                st.write(f"**Assigned To:** {task.get('Assigned To', 'N/A')}")
                             with col2:
-                                st.write(f"**Related To:** {task['Related To']}")
-                                st.write(f"**Status:** {task['Status']}")
-                                if task['Status'] == "Completed" and task['Completed Date']:
+                                st.write(f"**Related To:** {task.get('Related To', 'N/A')}")
+                                st.write(f"**Status:** {task.get('Status', 'N/A')}")
+                                if task.get('Status') == "Completed" and task.get('Completed Date'):
                                     st.write(f"**Completed On:** {task['Completed Date']}")
                             
-                            st.write(f"**Description:** {task['Description']}")
+                            st.write(f"**Description:** {task.get('Description', 'No description')}")
                             
                             # Update task status
+                            current_status = task.get('Status', 'Not Started')
                             new_status = st.selectbox("Update Status", 
                                                     options=["Not Started", "In Progress", "Completed"],
-                                                    index=["Not Started", "In Progress", "Completed"].index(task['Status']),
+                                                    index=["Not Started", "In Progress", "Completed"].index(current_status) if current_status in ["Not Started", "In Progress", "Completed"] else 0,
                                                     key=f"status_{task['ID']}")
                             
                             if st.button("Update", key=f"update_{task['ID']}"):
@@ -2122,7 +2127,7 @@ def main():
                                                        key="appointment_status_filter")
                 
                 filtered_appointments = appointments_df.copy()
-                if appointment_status_filter != "All":
+                if appointment_status_filter != "All" and "Status" in filtered_appointments.columns:
                     filtered_appointments = filtered_appointments[filtered_appointments["Status"] == appointment_status_filter]
                 
                 if filtered_appointments.empty:
@@ -2132,21 +2137,22 @@ def main():
                         with st.expander(f"{appointment['Title']} - {appointment['Status']}"):
                             col1, col2 = st.columns(2)
                             with col1:
-                                st.write(f"**Date:** {appointment['Date']}")
-                                st.write(f"**Time:** {appointment['Time']}")
-                                st.write(f"**Duration:** {appointment['Duration']} minutes")
-                                st.write(f"**Location:** {appointment['Location']}")
+                                st.write(f"**Date:** {appointment.get('Date', 'N/A')}")
+                                st.write(f"**Time:** {appointment.get('Time', 'N/A')}")
+                                st.write(f"**Duration:** {appointment.get('Duration', 'N/A')} minutes")
+                                st.write(f"**Location:** {appointment.get('Location', 'N/A')}")
                             with col2:
-                                st.write(f"**Related To:** {appointment['Related To']}")
-                                st.write(f"**Status:** {appointment['Status']}")
-                                st.write(f"**Attendees:** {appointment['Attendees']}")
+                                st.write(f"**Related To:** {appointment.get('Related To', 'N/A')}")
+                                st.write(f"**Status:** {appointment.get('Status', 'N/A')}")
+                                st.write(f"**Attendees:** {appointment.get('Attendees', 'N/A')}")
                             
-                            st.write(f"**Description:** {appointment['Description']}")
+                            st.write(f"**Description:** {appointment.get('Description', 'No description')}")
                             
                             # Update appointment status
+                            current_status = appointment.get('Status', 'Scheduled')
                             new_status = st.selectbox("Update Status", 
                                                     options=["Scheduled", "Confirmed", "Completed", "Cancelled"],
-                                                    index=["Scheduled", "Confirmed", "Completed", "Cancelled"].index(appointment['Status']),
+                                                    index=["Scheduled", "Confirmed", "Completed", "Cancelled"].index(current_status) if current_status in ["Scheduled", "Confirmed", "Completed", "Cancelled"] else 0,
                                                     key=f"status_{appointment['ID']}")
                             
                             if st.button("Update", key=f"update_{appointment['ID']}"):
