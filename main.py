@@ -1979,7 +1979,7 @@ def main():
                     
                     description = st.text_area("Description")
                     assigned_to = st.text_input("Assigned To", value="Current User")
-                                        if st.form_submit_button("Add Task"):
+                    if st.form_submit_button("Add Task"):
                         if not task_title:
                             st.error("Task title is required!")
                         else:
