@@ -1048,3 +1048,99 @@ def display_lead_analytics(leads_df, activities_df):
             st.info("No activities data available.")
     else:
         st.info("No activities data available.")
+# Add these functions to your existing utils.py file
+
+def fuzzy_feature_match(row_features, selected_features):
+    """Fuzzy match features with safety checks"""
+    if not selected_features:
+        return True
+    
+    row_features_str = str(row_features or "")
+    row_features_list = [f.strip().lower() for f in row_features_str.split(",") if f.strip()]
+    
+    for sel in selected_features:
+        if not sel:
+            continue
+        sel_lower = sel.strip().lower()
+        # Exact match first
+        if sel_lower in row_features_list:
+            return True
+        # Fuzzy match
+        match = difflib.get_close_matches(sel_lower, row_features_list, n=1, cutoff=0.7)
+        if match:
+            return True
+    return False
+
+def update_plot_data(updated_row):
+    """Update a specific plot row in Google Sheets"""
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return False
+            
+        sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
+        
+        # Get all data to find the row
+        all_data = sheet.get_all_records()
+        row_num = updated_row.get("SheetRowNum")
+        
+        if row_num and row_num >= 2:
+            # Update the specific row
+            row_values = []
+            headers = sheet.row_values(1)
+            
+            for header in headers:
+                row_values.append(updated_row.get(header, ""))
+            
+            sheet.update(f"A{row_num}:{chr(64 + len(headers))}{row_num}", [row_values])
+            st.cache_data.clear()  # Clear cache to refresh data
+            return True
+        else:
+            st.error("Invalid row number for update")
+            return False
+            
+    except Exception as e:
+        st.error(f"Error updating plot data: {str(e)}")
+        return False
+
+def save_sold_data(df):
+    """Save sold data to Google Sheets"""
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return False
+            
+        try:
+            sheet = client.open(SPREADSHEET_NAME).worksheet(SOLD_SHEET)
+        except gspread.exceptions.WorksheetNotFound:
+            spreadsheet = client.open(SPREADSHEET_NAME)
+            sheet = spreadsheet.add_worksheet(title=SOLD_SHEET, rows=100, cols=25)
+            headers = [
+                "ID", "Timestamp", "Sector", "Plot No", "Street No", "Plot Size", "Demand", 
+                "Features", "Property Type", "Extracted Name", "Extracted Contact", 
+                "Buyer Name", "Buyer Contact", "Sale Date", "Sale Price", "Commission",
+                "Agent", "Notes", "Original Row Num"
+            ]
+            sheet.append_row(headers)
+        
+        sheet.clear()
+        headers = df.columns.tolist()
+        sheet.append_row(headers)
+        
+        for i in range(0, len(df), BATCH_SIZE):
+            batch = df.iloc[i:i+BATCH_SIZE]
+            rows = []
+            for _, row in batch.iterrows():
+                rows.append(row.tolist())
+            sheet.append_rows(rows)
+            time.sleep(API_DELAY)
+            
+        st.cache_data.clear()  # Clear cache to refresh data
+        return True
+    except Exception as e:
+        st.error(f"Error saving sold data: {str(e)}")
+        return False
+
+def generate_sold_id():
+    """Generate unique ID for sold listings"""
+    return f"S{int(datetime.now().timestamp())}"
