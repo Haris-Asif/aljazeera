@@ -213,9 +213,11 @@ def show_plots_manager():
 
     # Price filtering (only if prices can be parsed)
     df_filtered["ParsedPrice"] = df_filtered["Demand"].apply(parse_price)
+    # Only apply price filter if we have valid parsed prices
     if "ParsedPrice" in df_filtered.columns:
         df_filtered_with_price = df_filtered[df_filtered["ParsedPrice"].notnull()]
-        df_filtered = df_filtered_with_price[(df_filtered_with_price["ParsedPrice"] >= st.session_state.price_from) & (df_filtered_with_price["ParsedPrice"] <= st.session_state.price_to)]
+        if not df_filtered_with_price.empty:
+            df_filtered = df_filtered_with_price[(df_filtered_with_price["ParsedPrice"] >= st.session_state.price_from) & (df_filtered_with_price["ParsedPrice"] <= st.session_state.price_to)]
 
     if st.session_state.selected_features:
         df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match(x, st.session_state.selected_features))]
@@ -356,7 +358,7 @@ def show_plots_manager():
     else:
         st.info("No listings to analyze for duplicates")
 
-    # WhatsApp section
+    # WhatsApp section - PRESERVE EXISTING LOGIC FOR WHATSAPP MESSAGE GENERATION
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
 
@@ -390,7 +392,8 @@ def show_plots_manager():
             st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
             st.stop()
 
-        # Generate WhatsApp messages using the same filtered dataframe
+        # Generate WhatsApp messages using the SAME LOGIC AS BEFORE
+        # This will filter out listings that don't meet WhatsApp criteria while preserving the display
         messages = generate_whatsapp_messages(df_filtered)
         if not messages:
             st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots.")
