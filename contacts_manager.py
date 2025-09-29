@@ -14,7 +14,7 @@ def show_contacts_manager():
     if not contacts_df.empty:
         contacts_df["SheetRowNum"] = [i + 2 for i in range(len(contacts_df))]
     
-    # Display metrics
+    # Display metrics with safe column access
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -22,18 +22,28 @@ def show_contacts_manager():
         st.metric("📇 Total Contacts", total_contacts)
     
     with col2:
-        contacts_with_email = len(contacts_df[contacts_df["Email"].notna() & (contacts_df["Email"] != "")])
+        # Safe column access for Email
+        contacts_with_email = 0
+        if not contacts_df.empty and "Email" in contacts_df.columns:
+            contacts_with_email = len(contacts_df[contacts_df["Email"].notna() & (contacts_df["Email"] != "")])
         st.metric("📧 With Email", contacts_with_email)
     
     with col3:
-        contacts_with_address = len(contacts_df[contacts_df["Address"].notna() & (contacts_df["Address"] != "")])
+        # Safe column access for Address
+        contacts_with_address = 0
+        if not contacts_df.empty and "Address" in contacts_df.columns:
+            contacts_with_address = len(contacts_df[contacts_df["Address"].notna() & (contacts_df["Address"] != "")])
         st.metric("🏠 With Address", contacts_with_address)
     
     with col4:
-        multiple_contacts = len(contacts_df[
-            (contacts_df["Contact2"].notna() & (contacts_df["Contact2"] != "")) |
-            (contacts_df["Contact3"].notna() & (contacts_df["Contact3"] != ""))
-        ])
+        # Safe column access for multiple contacts
+        multiple_contacts = 0
+        if not contacts_df.empty:
+            if "Contact2" in contacts_df.columns and "Contact3" in contacts_df.columns:
+                multiple_contacts = len(contacts_df[
+                    (contacts_df["Contact2"].notna() & (contacts_df["Contact2"] != "")) |
+                    (contacts_df["Contact3"].notna() & (contacts_df["Contact3"] != ""))
+                ])
         st.metric("📱 Multiple Numbers", multiple_contacts)
     
     # Main content in tabs
@@ -51,6 +61,10 @@ def show_contacts_manager():
 def show_contacts_view(contacts_df):
     """Display and manage existing contacts"""
     st.subheader("📋 All Contacts")
+    
+    if contacts_df.empty:
+        st.info("No contacts found. Add your first contact in the 'Add Contacts' tab.")
+        return
     
     # Search and filters
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -71,19 +85,22 @@ def show_contacts_view(contacts_df):
         filtered_contacts = filtered_contacts[
             filtered_contacts["Name"].str.contains(search_term, case=False, na=False) |
             filtered_contacts["Contact1"].str.contains(search_term, case=False, na=False) |
-            filtered_contacts["Contact2"].str.contains(search_term, case=False, na=False) |
-            filtered_contacts["Contact3"].str.contains(search_term, case=False, na=False)
+            (filtered_contacts["Contact2"].str.contains(search_term, case=False, na=False) if "Contact2" in filtered_contacts.columns else False) |
+            (filtered_contacts["Contact3"].str.contains(search_term, case=False, na=False) if "Contact3" in filtered_contacts.columns else False)
         ]
     
     if filter_by == "With Email":
-        filtered_contacts = filtered_contacts[filtered_contacts["Email"].notna() & (filtered_contacts["Email"] != "")]
+        if "Email" in filtered_contacts.columns:
+            filtered_contacts = filtered_contacts[filtered_contacts["Email"].notna() & (filtered_contacts["Email"] != "")]
     elif filter_by == "With Address":
-        filtered_contacts = filtered_contacts[filtered_contacts["Address"].notna() & (filtered_contacts["Address"] != "")]
+        if "Address" in filtered_contacts.columns:
+            filtered_contacts = filtered_contacts[filtered_contacts["Address"].notna() & (filtered_contacts["Address"] != "")]
     elif filter_by == "Multiple Numbers":
-        filtered_contacts = filtered_contacts[
-            (filtered_contacts["Contact2"].notna() & (filtered_contacts["Contact2"] != "")) |
-            (filtered_contacts["Contact3"].notna() & (filtered_contacts["Contact3"] != ""))
-        ]
+        if "Contact2" in filtered_contacts.columns and "Contact3" in filtered_contacts.columns:
+            filtered_contacts = filtered_contacts[
+                (filtered_contacts["Contact2"].notna() & (filtered_contacts["Contact2"] != "")) |
+                (filtered_contacts["Contact3"].notna() & (filtered_contacts["Contact3"] != ""))
+            ]
     
     # Apply sorting
     if sort_by == "Name A-Z":
@@ -199,7 +216,7 @@ def show_add_contact_form():
             else:
                 # Create contact data
                 contact_data = [
-                    name, contact1, contact2, contact3, email, address, notes
+                    name, contact1, contact2 or "", contact3 or "", email or "", address or "", notes or ""
                 ]
                 
                 # Add to Google Sheets
@@ -268,10 +285,10 @@ def import_contacts_to_sheet(contacts):
         contacts_batch.append([
             contact["Name"],
             contact["Contact1"],
-            contact["Contact2"],
-            contact["Contact3"],
-            contact["Email"],
-            contact["Address"],
+            contact.get("Contact2", ""),
+            contact.get("Contact3", ""),
+            contact.get("Email", ""),
+            contact.get("Address", ""),
             ""  # Notes field
         ])
     
