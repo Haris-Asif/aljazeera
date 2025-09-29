@@ -26,6 +26,14 @@ def show_plots_manager():
         st.session_state.edit_mode = False
     if 'editing_row' not in st.session_state:
         st.session_state.editing_row = None
+    if 'mark_sold_mode' not in st.session_state:
+        st.session_state.mark_sold_mode = False
+    if 'mark_sold_rows' not in st.session_state:
+        st.session_state.mark_sold_rows = None
+    
+    # Initialize session state for filters
+    if 'filters_reset' not in st.session_state:
+        st.session_state.filters_reset = False
     
     # Sidebar Filters with modern styling
     with st.sidebar:
@@ -35,45 +43,116 @@ def show_plots_manager():
         </div>
         """, unsafe_allow_html=True)
         
-        sector_filter = st.text_input("Sector")
-        plot_size_filter = st.text_input("Plot Size")
-        street_filter = st.text_input("Street No")
-        plot_no_filter = st.text_input("Plot No")
-        contact_filter = st.text_input("Phone Number")
-        price_from = st.number_input("Price From (in Lacs)", min_value=0.0, value=0.0, step=1.0)
-        price_to = st.number_input("Price To (in Lacs)", min_value=0.0, value=1000.0, step=1.0)
+        # Use session state to persist filter values
+        if 'sector_filter' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.sector_filter = ""
+        sector_filter = st.text_input("Sector", value=st.session_state.sector_filter, key="sector_filter_input")
+        
+        if 'plot_size_filter' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.plot_size_filter = ""
+        plot_size_filter = st.text_input("Plot Size", value=st.session_state.plot_size_filter, key="plot_size_filter_input")
+        
+        if 'street_filter' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.street_filter = ""
+        street_filter = st.text_input("Street No", value=st.session_state.street_filter, key="street_filter_input")
+        
+        if 'plot_no_filter' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.plot_no_filter = ""
+        plot_no_filter = st.text_input("Plot No", value=st.session_state.plot_no_filter, key="plot_no_filter_input")
+        
+        if 'contact_filter' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.contact_filter = ""
+        contact_filter = st.text_input("Phone Number", value=st.session_state.contact_filter, key="contact_filter_input")
+        
+        if 'price_from' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.price_from = 0.0
+        price_from = st.number_input("Price From (in Lacs)", min_value=0.0, value=st.session_state.price_from, step=1.0, key="price_from_input")
+        
+        if 'price_to' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.price_to = 1000.0
+        price_to = st.number_input("Price To (in Lacs)", min_value=0.0, value=st.session_state.price_to, step=1.0, key="price_to_input")
         
         all_features = get_all_unique_features(df)
-        selected_features = st.multiselect("Select Feature(s)", options=all_features)
-        date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"])
+        
+        if 'selected_features' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.selected_features = []
+        selected_features = st.multiselect("Select Feature(s)", options=all_features, default=st.session_state.selected_features, key="features_input")
+        
+        if 'date_filter' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.date_filter = "All"
+        date_filter = st.selectbox("Date Range", ["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"], 
+                                 index=["All", "Last 7 Days", "Last 15 Days", "Last 30 Days", "Last 2 Months"].index(st.session_state.date_filter), 
+                                 key="date_filter_input")
 
         # Property Type filter
         prop_type_options = ["All"]
         if "Property Type" in df.columns:
             prop_type_options += sorted([str(v).strip() for v in df["Property Type"].dropna().astype(str).unique()])
-        selected_prop_type = st.selectbox("Property Type", prop_type_options)
+        
+        if 'selected_prop_type' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.selected_prop_type = "All"
+        selected_prop_type = st.selectbox("Property Type", prop_type_options, 
+                                        index=prop_type_options.index(st.session_state.selected_prop_type), 
+                                        key="prop_type_input")
 
         dealer_names, contact_to_name = build_name_map(df)
-        selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names)
+        
+        if 'selected_dealer' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.selected_dealer = ""
+        selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names, 
+                                     index=([""] + dealer_names).index(st.session_state.selected_dealer) if st.session_state.selected_dealer in [""] + dealer_names else 0, 
+                                     key="dealer_input")
 
         contact_names = [""] + sorted(contacts_df["Name"].dropna().unique()) if not contacts_df.empty else [""]
         
         # Pre-select contact if coming from Contacts tab
         if st.session_state.get("selected_contact"):
-            selected_saved = st.selectbox("📇 Saved Contact (by number)", contact_names, 
-                                         index=contact_names.index(st.session_state.selected_contact) if st.session_state.selected_contact in contact_names else 0)
-            # Reset after using
+            st.session_state.selected_saved = st.session_state.selected_contact
             st.session_state.selected_contact = None
-        else:
-            selected_saved = st.selectbox("📇 Saved Contact (by number)", contact_names)
         
-        # Reset Filters Button
-        if st.button("🔄 Reset All Filters", use_container_width=True):
+        if 'selected_saved' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.selected_saved = ""
+        selected_saved = st.selectbox("📇 Saved Contact (by number)", contact_names, 
+                                    index=contact_names.index(st.session_state.selected_saved) if st.session_state.selected_saved in contact_names else 0, 
+                                    key="saved_contact_input")
+        
+        # Reset Filters Button - FIXED: Actually reset all filters
+        if st.button("🔄 Reset All Filters", use_container_width=True, key="reset_filters_btn"):
+            # Reset all filter session states
+            st.session_state.sector_filter = ""
+            st.session_state.plot_size_filter = ""
+            st.session_state.street_filter = ""
+            st.session_state.plot_no_filter = ""
+            st.session_state.contact_filter = ""
+            st.session_state.price_from = 0.0
+            st.session_state.price_to = 1000.0
+            st.session_state.selected_features = []
+            st.session_state.date_filter = "All"
+            st.session_state.selected_prop_type = "All"
+            st.session_state.selected_dealer = ""
+            st.session_state.selected_saved = ""
+            st.session_state.filters_reset = True
             st.rerun()
+        else:
+            st.session_state.filters_reset = False
     
+    # Update session state with current filter values
+    st.session_state.sector_filter = sector_filter
+    st.session_state.plot_size_filter = plot_size_filter
+    st.session_state.street_filter = street_filter
+    st.session_state.plot_no_filter = plot_no_filter
+    st.session_state.contact_filter = contact_filter
+    st.session_state.price_from = price_from
+    st.session_state.price_to = price_to
+    st.session_state.selected_features = selected_features
+    st.session_state.date_filter = date_filter
+    st.session_state.selected_prop_type = selected_prop_type
+    st.session_state.selected_dealer = selected_dealer
+    st.session_state.selected_saved = selected_saved
+
     # Display dealer contact info if selected
-    if selected_dealer:
-        actual_name = selected_dealer.split(". ", 1)[1] if ". " in selected_dealer else selected_dealer
+    if st.session_state.selected_dealer:
+        actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
         
         # Find all numbers for this dealer
         dealer_numbers = []
@@ -92,55 +171,56 @@ def show_plots_manager():
     # Apply filters - SHOW ALL LISTINGS regardless of missing values
     df_filtered = df.copy()
 
-    if selected_dealer:
-        actual_name = selected_dealer.split(". ", 1)[1] if ". " in selected_dealer else selected_dealer
+    if st.session_state.selected_dealer:
+        actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
         selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
         df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
-            lambda x: any(c in clean_number(x) for c in selected_contacts))]
+            lambda x: any(c in clean_number(str(x)) for c in selected_contacts))]
 
-    if selected_saved:
-        row = contacts_df[contacts_df["Name"] == selected_saved].iloc[0] if not contacts_df.empty and not contacts_df[contacts_df["Name"] == selected_saved].empty else None
+    if st.session_state.selected_saved:
+        row = contacts_df[contacts_df["Name"] == st.session_state.selected_saved].iloc[0] if not contacts_df.empty and not contacts_df[contacts_df["Name"] == st.session_state.selected_saved].empty else None
         selected_contacts = []
         if row is not None:
             for col in ["Contact1", "Contact2", "Contact3"]:
                 if col in row and pd.notna(row[col]):
-                    selected_contacts.extend(extract_numbers(row[col]))
+                    selected_contacts.extend(extract_numbers(str(row[col])))
         df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
-            lambda x: any(n in clean_number(x) for n in selected_contacts))]
+            lambda x: any(n in clean_number(str(x)) for n in selected_contacts))]
 
-    if sector_filter:
-        df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(sector_filter, x))]
-    if plot_size_filter:
-        df_filtered = df_filtered[df_filtered["Plot Size"].str.contains(plot_size_filter, case=False, na=False)]
+    if st.session_state.sector_filter:
+        df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(st.session_state.sector_filter, str(x)))]
+    if st.session_state.plot_size_filter:
+        df_filtered = df_filtered[df_filtered["Plot Size"].str.contains(st.session_state.plot_size_filter, case=False, na=False)]
     
     # Enhanced Street No filter - match exact or partial matches
-    if street_filter:
-        street_pattern = re.compile(re.escape(street_filter), re.IGNORECASE)
+    if st.session_state.street_filter:
+        street_pattern = re.compile(re.escape(st.session_state.street_filter), re.IGNORECASE)
         df_filtered = df_filtered[df_filtered["Street No"].apply(lambda x: bool(street_pattern.search(str(x))))]
     
     # Enhanced Plot No filter - match exact or partial matches
-    if plot_no_filter:
-        plot_pattern = re.compile(re.escape(plot_no_filter), re.IGNORECASE)
+    if st.session_state.plot_no_filter:
+        plot_pattern = re.compile(re.escape(st.session_state.plot_no_filter), re.IGNORECASE)
         df_filtered = df_filtered[df_filtered["Plot No"].apply(lambda x: bool(plot_pattern.search(str(x))))]
     
-    if contact_filter:
-        cnum = clean_number(contact_filter)
+    if st.session_state.contact_filter:
+        cnum = clean_number(st.session_state.contact_filter)
         df_filtered = df_filtered[df_filtered["Extracted Contact"].astype(str).apply(
             lambda x: any(cnum == clean_number(p) for p in x.split(",")))]
 
     # Apply Property Type filter if selected
-    if "Property Type" in df_filtered.columns and selected_prop_type and selected_prop_type != "All":
-        df_filtered = df_filtered[df_filtered["Property Type"].astype(str).str.strip() == selected_prop_type]
+    if "Property Type" in df_filtered.columns and st.session_state.selected_prop_type and st.session_state.selected_prop_type != "All":
+        df_filtered = df_filtered[df_filtered["Property Type"].astype(str).str.strip() == st.session_state.selected_prop_type]
 
     # Price filtering (only if prices can be parsed)
     df_filtered["ParsedPrice"] = df_filtered["Demand"].apply(parse_price)
-    df_filtered_with_price = df_filtered[df_filtered["ParsedPrice"].notnull()]
-    df_filtered_with_price = df_filtered_with_price[(df_filtered_with_price["ParsedPrice"] >= price_from) & (df_filtered_with_price["ParsedPrice"] <= price_to)]
+    if "ParsedPrice" in df_filtered.columns:
+        df_filtered_with_price = df_filtered[df_filtered["ParsedPrice"].notnull()]
+        df_filtered = df_filtered_with_price[(df_filtered_with_price["ParsedPrice"] >= st.session_state.price_from) & (df_filtered_with_price["ParsedPrice"] <= st.session_state.price_to)]
 
-    if selected_features:
-        df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match(x, selected_features))]
+    if st.session_state.selected_features:
+        df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match(x, st.session_state.selected_features))]
 
-    df_filtered = filter_by_date(df_filtered, date_filter)
+    df_filtered = filter_by_date(df_filtered, st.session_state.date_filter)
 
     # Move Timestamp column to the end
     if "Timestamp" in df_filtered.columns:
@@ -168,7 +248,7 @@ def show_plots_manager():
     
     st.info(f"📊 **Total filtered listings:** {len(df_filtered)} | ✅ **WhatsApp eligible:** {whatsapp_eligible_count}")
     
-    # Action buttons for selected rows
+    # Action buttons for selected rows - FIXED: Proper selection handling
     if not df_filtered.empty:
         display_df = df_filtered.copy().reset_index(drop=True)
         display_df.insert(0, "Select", False)
@@ -178,13 +258,16 @@ def show_plots_manager():
         with col1:
             select_all = st.checkbox("Select All Rows", key="select_all_main")
         with col2:
-            edit_btn = st.button("✏️ Edit Selected", use_container_width=True, disabled=not select_all and len(st.session_state.selected_rows) == 0)
+            edit_btn = st.button("✏️ Edit Selected", use_container_width=True, 
+                               disabled=len(st.session_state.selected_rows) == 0 and not select_all,
+                               key="edit_selected_btn")
         with col3:
-            mark_sold_btn = st.button("✅ Mark as Sold", use_container_width=True, disabled=not select_all and len(st.session_state.selected_rows) == 0)
+            mark_sold_btn = st.button("✅ Mark as Sold", use_container_width=True, 
+                                    disabled=len(st.session_state.selected_rows) == 0 and not select_all,
+                                    key="mark_sold_btn")
         
         if select_all:
             display_df["Select"] = True
-            st.session_state.selected_rows = display_df.index.tolist()
         
         # Configure columns for data editor
         column_config = {
@@ -202,25 +285,32 @@ def show_plots_manager():
             key="plots_data_editor"
         )
         
-        # Get selected rows
+        # Get selected rows - FIXED: Proper selection tracking
         selected_indices = edited_df[edited_df["Select"]].index.tolist()
-        st.session_state.selected_rows = selected_indices
         
-        if selected_indices:
-            st.success(f"**{len(selected_indices)} row(s) selected**")
+        # Update session state with selected indices
+        if select_all:
+            st.session_state.selected_rows = list(range(len(display_df)))
+        else:
+            st.session_state.selected_rows = selected_indices
+        
+        if st.session_state.selected_rows:
+            st.success(f"**{len(st.session_state.selected_rows)} row(s) selected**")
             
-            # Handle Edit action
+            # Handle Edit action - FIXED: Proper button handling
             if edit_btn:
-                if len(selected_indices) == 1:
+                if len(st.session_state.selected_rows) == 1:
                     st.session_state.edit_mode = True
-                    st.session_state.editing_row = display_df.iloc[selected_indices[0]].to_dict()
+                    st.session_state.editing_row = display_df.iloc[st.session_state.selected_rows[0]].to_dict()
+                    st.rerun()
                 else:
                     st.warning("Please select only one row to edit.")
             
-            # Handle Mark as Sold action
+            # Handle Mark as Sold action - FIXED: Proper button handling
             if mark_sold_btn:
                 st.session_state.mark_sold_mode = True
-                st.session_state.mark_sold_rows = [display_df.iloc[idx].to_dict() for idx in selected_indices]
+                st.session_state.mark_sold_rows = [display_df.iloc[idx].to_dict() for idx in st.session_state.selected_rows]
+                st.rerun()
         
         # Edit Form
         if st.session_state.get('edit_mode') and st.session_state.editing_row:
@@ -231,9 +321,9 @@ def show_plots_manager():
             show_mark_sold_form(st.session_state.mark_sold_rows)
             
         # Row deletion feature
-        if selected_indices:
+        if st.session_state.selected_rows:
             if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_button_main"):
-                row_nums = [display_df.iloc[idx]["SheetRowNum"] for idx in selected_indices]
+                row_nums = [display_df.iloc[idx]["SheetRowNum"] for idx in st.session_state.selected_rows]
                 
                 progress_bar = st.progress(0)
                 status_text = st.empty()
@@ -242,8 +332,9 @@ def show_plots_manager():
                 
                 if success:
                     progress_bar.progress(100)
-                    status_text.success(f"✅ Successfully deleted {len(selected_indices)} row(s)!")
+                    status_text.success(f"✅ Successfully deleted {len(st.session_state.selected_rows)} row(s)!")
                     st.cache_data.clear()
+                    st.session_state.selected_rows = []
                     st.rerun()
                 else:
                     status_text.error("❌ Failed to delete some rows. Please try again.")
