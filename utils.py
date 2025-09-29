@@ -31,6 +31,7 @@ LEADS_SHEET = "Leads"
 ACTIVITIES_SHEET = "LeadActivities"
 TASKS_SHEET = "Tasks"
 APPOINTMENTS_SHEET = "Appointments"
+SOLD_SHEET = "Sold"
 BATCH_SIZE = 10
 API_DELAY = 1
 
@@ -189,53 +190,6 @@ def _url_encode_for_whatsapp(text: str) -> str:
     """Encode minimally for wa.me URL (matching your existing approach)."""
     return text.replace(" ", "%20").replace("\n", "%0A")
 
-def _split_blocks_for_limits(blocks, plain_limit=3000, encoded_limit=1800):
-    """
-    Given a list of text blocks, accumulate them into chunks that
-    satisfy both plain text and encoded URL length limits.
-    """
-    chunks = []
-    current = ""
-
-    for block in blocks:
-        candidate = current + block
-        if len(candidate) > plain_limit or len(_url_encode_for_whatsapp(candidate)) > encoded_limit:
-            if current:
-                chunks.append(current.rstrip())
-                current = ""
-
-            if len(block) > plain_limit or len(_url_encode_for_whatsapp(block)) > encoded_limit:
-                lines = block.splitlines(keepends=True)
-                small = ""
-                for ln in lines:
-                    cand2 = small + ln
-                    if len(cand2) > plain_limit or len(_url_encode_for_whatsapp(cand2)) > encoded_limit:
-                        if small:
-                            chunks.append(small.rstrip())
-                            small = ""
-                        seg = ln
-                        while seg:
-                            step = min(1000, len(seg))
-                            piece = seg[:step]
-                            while len(_url_encode_for_whatsapp(piece)) > encoded_limit and step > 10:
-                                step -= 10
-                                piece = seg[:step]
-                            chunks.append(piece.rstrip())
-                            seg = seg[step:]
-                    else:
-                        small = cand2
-                if small:
-                    chunks.append(small.rstrip())
-            else:
-                current = block
-        else:
-            current = candidate
-
-    if current:
-        chunks.append(current.rstrip())
-
-    return chunks
-
 def format_phone_link(phone):
     cleaned = clean_number(phone)
     if len(cleaned) == 10 and cleaned.startswith('3'):
@@ -372,6 +326,35 @@ def load_contacts():
         return df
     except Exception as e:
         st.error(f"Error loading contacts: {str(e)}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=300, show_spinner="Loading sold data...")
+def load_sold_data():
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return pd.DataFrame()
+            
+        try:
+            sheet = client.open(SPREADSHEET_NAME).worksheet(SOLD_SHEET)
+        except gspread.exceptions.WorksheetNotFound:
+            spreadsheet = client.open(SPREADSHEET_NAME)
+            sheet = spreadsheet.add_worksheet(title=SOLD_SHEET, rows=100, cols=25)
+            headers = [
+                "ID", "Timestamp", "Sector", "Plot No", "Street No", "Plot Size", "Demand", 
+                "Features", "Property Type", "Extracted Name", "Extracted Contact", 
+                "Buyer Name", "Buyer Contact", "Sale Date", "Sale Price", "Commission",
+                "Agent", "Notes", "Original Row Num"
+            ]
+            sheet.append_row(headers)
+            return pd.DataFrame(columns=headers)
+            
+        df = pd.DataFrame(sheet.get_all_records())
+        if not df.empty:
+            df["SheetRowNum"] = [i + 2 for i in range(len(df))]
+        return df
+    except Exception as e:
+        st.error(f"Error loading sold data: {str(e)}")
         return pd.DataFrame()
 
 @st.cache_data(ttl=300, show_spinner="Loading leads...")
@@ -571,6 +554,72 @@ def save_appointments(df):
         return True
     except Exception as e:
         st.error(f"Error saving appointments: {str(e)}")
+        return False
+
+def save_sold_data(df):
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return False
+            
+        try:
+            sheet = client.open(SPREADSHEET_NAME).worksheet(SOLD_SHEET)
+        except gspread.exceptions.WorksheetNotFound:
+            spreadsheet = client.open(SPREADSHEET_NAME)
+            sheet = spreadsheet.add_worksheet(title=SOLD_SHEET, rows=100, cols=25)
+            headers = [
+                "ID", "Timestamp", "Sector", "Plot No", "Street No", "Plot Size", "Demand", 
+                "Features", "Property Type", "Extracted Name", "Extracted Contact", 
+                "Buyer Name", "Buyer Contact", "Sale Date", "Sale Price", "Commission",
+                "Agent", "Notes", "Original Row Num"
+            ]
+            sheet.append_row(headers)
+        
+        sheet.clear()
+        headers = df.columns.tolist()
+        sheet.append_row(headers)
+        
+        for i in range(0, len(df), BATCH_SIZE):
+            batch = df.iloc[i:i+BATCH_SIZE]
+            rows = []
+            for _, row in batch.iterrows():
+                rows.append(row.tolist())
+            sheet.append_rows(rows)
+            time.sleep(API_DELAY)
+            
+        return True
+    except Exception as e:
+        st.error(f"Error saving sold data: {str(e)}")
+        return False
+
+def update_plot_data(updated_row):
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return False
+            
+        sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
+        
+        # Get all data to find the row
+        all_data = sheet.get_all_records()
+        row_num = updated_row.get("SheetRowNum")
+        
+        if row_num and row_num >= 2:
+            # Update the specific row
+            row_values = []
+            headers = sheet.row_values(1)
+            
+            for header in headers:
+                row_values.append(updated_row.get(header, ""))
+            
+            sheet.update(f"A{row_num}:{chr(64 + len(headers))}{row_num}", [row_values])
+            return True
+        else:
+            st.error("Invalid row number for update")
+            return False
+            
+    except Exception as e:
+        st.error(f"Error updating plot data: {str(e)}")
         return False
 
 def add_contact_to_sheet(contact_data):
@@ -775,8 +824,26 @@ def generate_whatsapp_messages(df):
         block = header + "\n".join(lines) + "\n\n"
         blocks.append(block)
 
-    messages = _split_blocks_for_limits(blocks, plain_limit=3000, encoded_limit=1800)
-    return messages
+    # Combine all blocks into a single message
+    full_message = "\n".join(blocks)
+    
+    # Split if too long (WhatsApp limit ~4096 chars)
+    if len(full_message) > 4000:
+        # Simple split by blocks if too long
+        messages = []
+        current_message = ""
+        for block in blocks:
+            if len(current_message + block) > 4000:
+                if current_message:
+                    messages.append(current_message.strip())
+                current_message = block
+            else:
+                current_message += block
+        if current_message:
+            messages.append(current_message.strip())
+        return messages
+    else:
+        return [full_message]
 
 # Lead Management Utilities
 def generate_lead_id():
@@ -790,6 +857,9 @@ def generate_task_id():
 
 def generate_appointment_id():
     return f"AP{int(datetime.now().timestamp())}"
+
+def generate_sold_id():
+    return f"S{int(datetime.now().timestamp())}"
 
 def calculate_lead_score(lead_data, activities_df):
     score = 0
