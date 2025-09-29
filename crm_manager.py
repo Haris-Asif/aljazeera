@@ -21,14 +21,17 @@ def show_crm_manager():
     total_leads = len(leads_df) if not leads_df.empty else 0
     
     # Initialize counts safely
-    status_counts = pd.Series()
+    new_leads = 0
+    contacted_leads = 0
+    negotiation_leads = 0
+    won_leads = 0
+    
     if not leads_df.empty and "Status" in leads_df.columns:
         status_counts = leads_df["Status"].value_counts()
-    
-    new_leads = status_counts.get("New", 0)
-    contacted_leads = status_counts.get("Contacted", 0) + status_counts.get("Follow-up", 0)
-    negotiation_leads = status_counts.get("Negotiation", 0) + status_counts.get("Offer Made", 0)
-    won_leads = status_counts.get("Deal Closed (Won)", 0)
+        new_leads = status_counts.get("New", 0)
+        contacted_leads = status_counts.get("Contacted", 0) + status_counts.get("Follow-up", 0)
+        negotiation_leads = status_counts.get("Negotiation", 0) + status_counts.get("Offer Made", 0)
+        won_leads = status_counts.get("Deal Closed (Won)", 0)
     
     # Count overdue actions
     today = datetime.now().date()
@@ -145,7 +148,7 @@ def handle_quick_action(action, leads_df, activities_df):
                 # Safe lead selection
                 lead_options = [""]
                 if not leads_df.empty and "Name" in leads_df.columns:
-                    lead_options.extend(list(leads_df["Name"].unique()))
+                    lead_options.extend([name for name in leads_df["Name"].unique() if pd.notna(name)])
                 lead_name = st.selectbox("Select Lead", options=lead_options)
                 phone = st.text_input("Phone Number", placeholder="03XXXXXXXXX")
             with col2:
@@ -165,11 +168,11 @@ def handle_quick_action(action, leads_df, activities_df):
                         if not matching_leads.empty:
                             lead_id = matching_leads.iloc[0]["ID"]
                     
-                    log_quick_activity(lead_id, lead_name, "Call", f"Quick call: {notes}", outcome, follow_up_date, activities_df)
-                    st.success("Call logged successfully!")
-                    # Clear the quick action after handling
-                    del st.session_state.quick_action
-                    st.rerun()
+                    if log_quick_activity(lead_id, lead_name, "Call", f"Quick call: {notes}", outcome, follow_up_date, activities_df):
+                        st.success("Call logged successfully!")
+                        # Clear the quick action after handling
+                        del st.session_state.quick_action
+                        st.rerun()
                 else:
                     st.error("Please select a lead")
 
@@ -190,7 +193,12 @@ def log_quick_activity(lead_id, lead_name, activity_type, details, outcome, foll
             "Outcome": outcome
         }
         
-        activities_df = pd.concat([activities_df, pd.DataFrame([new_activity])], ignore_index=True)
+        # Safely concatenate dataframes
+        if activities_df.empty:
+            activities_df = pd.DataFrame([new_activity])
+        else:
+            activities_df = pd.concat([activities_df, pd.DataFrame([new_activity])], ignore_index=True)
+        
         if save_lead_activities(activities_df):
             return True
         return False
@@ -327,10 +335,6 @@ def show_crm_dashboard(leads_df, activities_df, tasks_df, appointments_df):
         else:
             st.success("🎉 No high priority leads needing immediate attention!")
 
-# ... (rest of the existing crm_manager.py functions remain the same with updated styling)
-# The remaining functions (show_all_leads, update_lead_form, etc.) would follow the same pattern
-# with the enhanced styling applied throughout
-
 def show_all_leads(leads_df, activities_df):
     st.subheader("👥 All Leads")
     
@@ -349,22 +353,22 @@ def show_all_leads(leads_df, activities_df):
     with col1:
         status_options = ["All"] 
         if "Status" in leads_df.columns:
-            status_options.extend(list(leads_df["Status"].unique()))
+            status_options.extend([status for status in leads_df["Status"].unique() if pd.notna(status)])
         status_filter = st.selectbox("Filter by Status", options=status_options, key="status_filter")
     with col2:
         priority_options = ["All"]
         if "Priority" in leads_df.columns:
-            priority_options.extend(list(leads_df["Priority"].unique()))
+            priority_options.extend([priority for priority in leads_df["Priority"].unique() if pd.notna(priority)])
         priority_filter = st.selectbox("Filter by Priority", options=priority_options, key="priority_filter")
     with col3:
         source_options = ["All"]
         if "Source" in leads_df.columns:
-            source_options.extend(list(leads_df["Source"].unique()))
+            source_options.extend([source for source in leads_df["Source"].unique() if pd.notna(source)])
         source_filter = st.selectbox("Filter by Source", options=source_options, key="source_filter")
     with col4:
         assigned_options = ["All"]
         if "Assigned To" in leads_df.columns:
-            assigned_options.extend(list(leads_df["Assigned To"].unique()))
+            assigned_options.extend([assigned for assigned in leads_df["Assigned To"].unique() if pd.notna(assigned)])
         assigned_filter = st.selectbox("Filter by Assigned To", options=assigned_options, key="assigned_filter")
     
     # NEW: Search by name or phone
@@ -397,16 +401,101 @@ def show_all_leads(leads_df, activities_df):
         display_columns = ["Name", "Phone", "Status", "Priority", "Source", "Last Contact", "Next Action"]
         available_columns = [col for col in display_columns if col in filtered_leads.columns]
         
+        # Display the dataframe
         st.dataframe(filtered_leads[available_columns], use_container_width=True, height=300)
         
-        # Lead update form
-        st.subheader("Update Lead")
-        lead_options = [f"{row['Name']} ({row['Phone']}) - {row['ID']}" for _, row in filtered_leads.iterrows()]
-        selected_lead = st.selectbox("Select Lead to Update", options=lead_options, key="update_lead_select")
-        
-        if selected_lead:
-            update_lead_form(selected_lead, filtered_leads, leads_df, activities_df)
+        # Lead update form - FIXED: Only show if leads exist
+        if len(filtered_leads) > 0:
+            st.subheader("Update Lead")
+            lead_options = [f"{row['Name']} ({row['Phone']}) - {row['ID']}" for _, row in filtered_leads.iterrows()]
+            selected_lead = st.selectbox("Select Lead to Update", options=lead_options, key="update_lead_select")
+            
+            if selected_lead:
+                update_lead_form(selected_lead, filtered_leads, leads_df, activities_df)
     else:
         st.info("No leads match your filters.")
 
-# ... Continue with the rest of the existing functions with similar styling enhancements
+def update_lead_form(selected_lead, filtered_leads, leads_df, activities_df):
+    """Extracted lead update form for better organization"""
+    try:
+        lead_id = selected_lead.split(" - ")[-1]
+        lead_match = filtered_leads[filtered_leads["ID"] == lead_id]
+        
+        if lead_match.empty:
+            st.warning("Selected lead not found. Please select another lead.")
+            return
+        
+        lead_data = lead_match.iloc[0]
+        
+        with st.form("update_lead_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                status_options = ["New", "Contacted", "Follow-up", "Meeting Scheduled", 
+                                "Negotiation", "Offer Made", "Deal Closed (Won)", "Not Interested (Lost)"]
+                current_status = lead_data.get("Status", "New")
+                status_index = status_options.index(current_status) if current_status in status_options else 0
+                new_status = st.selectbox("Status", options=status_options, index=status_index)
+                
+                priority_options = ["Low", "Medium", "High"]
+                current_priority = lead_data.get("Priority", "Low")
+                priority_index = priority_options.index(current_priority) if current_priority in priority_options else 0
+                new_priority = st.selectbox("Priority", options=priority_options, index=priority_index)
+                
+                # Next action date
+                next_action_date = datetime.now().date()
+                if lead_data.get("Next Action") and pd.notna(lead_data.get("Next Action")):
+                    try:
+                        next_action_date = datetime.strptime(str(lead_data.get("Next Action")), "%Y-%m-%d").date()
+                    except:
+                        pass
+                new_next_action = st.date_input("Next Action", value=next_action_date)
+                
+                # Next action type
+                action_type_options = ["Call", "Email", "Meeting", "Site Visit", "Follow-up"]
+                current_action_type = lead_data.get("Next Action Type", "Call")
+                action_type_index = action_type_options.index(current_action_type) if current_action_type in action_type_options else 0
+                new_next_action_type = st.selectbox("Next Action Type", options=action_type_options, index=action_type_index)
+            
+            with col2:
+                # Last contact date
+                last_contact_date = datetime.now().date()
+                if lead_data.get("Last Contact") and pd.notna(lead_data.get("Last Contact")):
+                    try:
+                        last_contact_date = datetime.strptime(str(lead_data.get("Last Contact", "")), "%Y-%m-%d").date()
+                    except:
+                        pass
+                new_last_contact = st.date_input("Last Contact", value=last_contact_date)
+                
+                # Budget
+                current_budget = lead_data.get("Budget", 0)
+                if isinstance(current_budget, str) and current_budget.isdigit():
+                    current_budget = int(current_budget)
+                elif not isinstance(current_budget, (int, float)):
+                    current_budget = 0
+                new_budget = st.number_input("Budget (₹)", value=current_budget)
+                
+                new_location = st.text_input("Location Preference", value=lead_data.get("Location Preference", ""))
+                new_notes = st.text_area("Notes", value=lead_data.get("Notes", ""))
+            
+            # NEW: Quick action buttons in the form
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                update_btn = st.form_submit_button("💾 Update Lead")
+            with col2:
+                log_call_btn = st.form_submit_button("📞 Log Call")
+            with col3:
+                log_whatsapp_btn = st.form_submit_button("💬 Log WhatsApp")
+            
+            if update_btn:
+                update_lead_data(lead_id, leads_df, activities_df, new_status, new_priority, new_next_action,
+                               new_next_action_type, new_last_contact, new_budget, new_location, new_notes)
+            
+            if log_call_btn:
+                log_quick_call(lead_id, lead_data, activities_df)
+            
+            if log_whatsapp_btn:
+                log_quick_whatsapp(lead_id, lead_data, activities_df)
+    except Exception as e:
+        st.error(f"Error in update form: {str(e)}")
+
+# ... (rest of the crm_manager.py functions remain the same but with similar safety checks)
