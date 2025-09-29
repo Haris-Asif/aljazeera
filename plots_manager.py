@@ -1,10 +1,12 @@
 import streamlit as st
 import pandas as pd
+import re
 from utils import (load_plot_data, load_contacts, delete_rows_from_sheet, 
                   generate_whatsapp_messages, build_name_map, sector_matches,
                   extract_numbers, clean_number, format_phone_link, 
                   get_all_unique_features, filter_by_date, create_duplicates_view,
-                  parse_price)
+                  parse_price, update_plot_data, load_sold_data, save_sold_data,
+                  generate_sold_id)
 
 def show_plots_manager():
     st.header("🏠 Plots Management")
@@ -17,14 +19,27 @@ def show_plots_manager():
     if not contacts_df.empty:
         contacts_df["SheetRowNum"] = [i + 2 for i in range(len(contacts_df))]
     
-    # Sidebar Filters
+    # Initialize session state for selected rows
+    if 'selected_rows' not in st.session_state:
+        st.session_state.selected_rows = []
+    if 'edit_mode' not in st.session_state:
+        st.session_state.edit_mode = False
+    if 'editing_row' not in st.session_state:
+        st.session_state.editing_row = None
+    
+    # Sidebar Filters with modern styling
     with st.sidebar:
-        st.header("🔍 Filters")
+        st.markdown("""
+        <div class='custom-card'>
+            <h3>🔍 Filters</h3>
+        </div>
+        """, unsafe_allow_html=True)
+        
         sector_filter = st.text_input("Sector")
         plot_size_filter = st.text_input("Plot Size")
         street_filter = st.text_input("Street No")
         plot_no_filter = st.text_input("Plot No")
-        contact_filter = st.text_input("Phone Number (03xxxxxxxxx)")
+        contact_filter = st.text_input("Phone Number")
         price_from = st.number_input("Price From (in Lacs)", min_value=0.0, value=0.0, step=1.0)
         price_to = st.number_input("Price To (in Lacs)", min_value=0.0, value=1000.0, step=1.0)
         
@@ -51,6 +66,10 @@ def show_plots_manager():
             st.session_state.selected_contact = None
         else:
             selected_saved = st.selectbox("📇 Saved Contact (by number)", contact_names)
+        
+        # Reset Filters Button
+        if st.button("🔄 Reset All Filters", use_container_width=True):
+            st.rerun()
     
     # Display dealer contact info if selected
     if selected_dealer:
@@ -63,14 +82,14 @@ def show_plots_manager():
                 dealer_numbers.append(contact)
         
         if dealer_numbers:
-            st.subheader(f"📞 Contact: {actual_name}")
+            st.info(f"**📞 Contact: {actual_name}**")
             cols = st.columns(len(dealer_numbers))
             for i, num in enumerate(dealer_numbers):
                 formatted_num = format_phone_link(num)
-                cols[i].markdown(f'<a href="tel:{formatted_num}" style="display: inline-block; padding: 0.5rem 1rem; background-color: #25D366; color: white; text-decoration: none; border-radius: 0.5rem;">Call {num}</a>', 
+                cols[i].markdown(f'<a href="tel:{formatted_num}" style="display: inline-block; padding: 0.5rem 1rem; background-color: #25D366; color: white; text-decoration: none; border-radius: 0.5rem; font-weight: 600;">Call {num}</a>', 
                                 unsafe_allow_html=True)
 
-    # Apply filters
+    # Apply filters - SHOW ALL LISTINGS regardless of missing values
     df_filtered = df.copy()
 
     if selected_dealer:
@@ -113,9 +132,10 @@ def show_plots_manager():
     if "Property Type" in df_filtered.columns and selected_prop_type and selected_prop_type != "All":
         df_filtered = df_filtered[df_filtered["Property Type"].astype(str).str.strip() == selected_prop_type]
 
+    # Price filtering (only if prices can be parsed)
     df_filtered["ParsedPrice"] = df_filtered["Demand"].apply(parse_price)
-    df_filtered = df_filtered[df_filtered["ParsedPrice"].notnull()]
-    df_filtered = df_filtered[(df_filtered["ParsedPrice"] >= price_from) & (df_filtered["ParsedPrice"] <= price_to)]
+    df_filtered_with_price = df_filtered[df_filtered["ParsedPrice"].notnull()]
+    df_filtered_with_price = df_filtered_with_price[(df_filtered_with_price["ParsedPrice"] >= price_from) & (df_filtered_with_price["ParsedPrice"] <= price_to)]
 
     if selected_features:
         df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match(x, selected_features))]
@@ -129,7 +149,7 @@ def show_plots_manager():
 
     st.subheader("📋 Filtered Listings")
     
-    # Count WhatsApp eligible listings
+    # Count WhatsApp eligible listings (using the same logic as before)
     whatsapp_eligible_count = 0
     for _, row in df_filtered.iterrows():
         sector = str(row.get("Sector", "")).strip()
@@ -146,17 +166,25 @@ def show_plots_manager():
             continue
         whatsapp_eligible_count += 1
     
-    st.info(f"📊 Total filtered listings: {len(df_filtered)} | ✅ WhatsApp eligible: {whatsapp_eligible_count}")
+    st.info(f"📊 **Total filtered listings:** {len(df_filtered)} | ✅ **WhatsApp eligible:** {whatsapp_eligible_count}")
     
-    # Row selection and deletion feature for main table
+    # Action buttons for selected rows
     if not df_filtered.empty:
         display_df = df_filtered.copy().reset_index(drop=True)
         display_df.insert(0, "Select", False)
         
         # Add "Select All" checkbox
-        select_all = st.checkbox("Select All Rows", key="select_all_main")
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col1:
+            select_all = st.checkbox("Select All Rows", key="select_all_main")
+        with col2:
+            edit_btn = st.button("✏️ Edit Selected", use_container_width=True, disabled=not select_all and len(st.session_state.selected_rows) == 0)
+        with col3:
+            mark_sold_btn = st.button("✅ Mark as Sold", use_container_width=True, disabled=not select_all and len(st.session_state.selected_rows) == 0)
+        
         if select_all:
             display_df["Select"] = True
+            st.session_state.selected_rows = display_df.index.tolist()
         
         # Configure columns for data editor
         column_config = {
@@ -170,30 +198,51 @@ def show_plots_manager():
             column_config=column_config,
             hide_index=True,
             use_container_width=True,
-            disabled=display_df.columns.difference(["Select"]).tolist()
+            disabled=display_df.columns.difference(["Select"]).tolist(),
+            key="plots_data_editor"
         )
         
         # Get selected rows
-        selected_rows = edited_df[edited_df["Select"]]
+        selected_indices = edited_df[edited_df["Select"]].index.tolist()
+        st.session_state.selected_rows = selected_indices
         
-        if not selected_rows.empty:
-            st.markdown(f"**{len(selected_rows)} row(s) selected**")
+        if selected_indices:
+            st.success(f"**{len(selected_indices)} row(s) selected**")
             
-            # Show delete confirmation with progress bar
+            # Handle Edit action
+            if edit_btn:
+                if len(selected_indices) == 1:
+                    st.session_state.edit_mode = True
+                    st.session_state.editing_row = display_df.iloc[selected_indices[0]].to_dict()
+                else:
+                    st.warning("Please select only one row to edit.")
+            
+            # Handle Mark as Sold action
+            if mark_sold_btn:
+                st.session_state.mark_sold_mode = True
+                st.session_state.mark_sold_rows = [display_df.iloc[idx].to_dict() for idx in selected_indices]
+        
+        # Edit Form
+        if st.session_state.get('edit_mode') and st.session_state.editing_row:
+            show_edit_form(st.session_state.editing_row)
+        
+        # Mark as Sold Form
+        if st.session_state.get('mark_sold_mode') and st.session_state.mark_sold_rows:
+            show_mark_sold_form(st.session_state.mark_sold_rows)
+            
+        # Row deletion feature
+        if selected_indices:
             if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_button_main"):
-                row_nums = selected_rows["SheetRowNum"].tolist()
+                row_nums = [display_df.iloc[idx]["SheetRowNum"] for idx in selected_indices]
                 
-                # Show progress
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                # Delete with progress updates
                 success = delete_rows_from_sheet(row_nums)
                 
                 if success:
                     progress_bar.progress(100)
-                    status_text.success(f"✅ Successfully deleted {len(selected_rows)} row(s)!")
-                    # Clear cache and refresh
+                    status_text.success(f"✅ Successfully deleted {len(selected_indices)} row(s)!")
                     st.cache_data.clear()
                     st.rerun()
                 else:
@@ -201,85 +250,29 @@ def show_plots_manager():
     else:
         st.info("No listings match your filters")
     
+    # Duplicates section
     st.markdown("---")
-    st.subheader("👥 Duplicate Listings (Matching Sector, Plot No, Street No, Plot Size)")
+    st.subheader("👥 Duplicate Listings Detection")
     
-    # Create and display grouped view with colors for duplicates
     if not df_filtered.empty:
-        # Generate styled DataFrame with duplicate groups
         styled_duplicates_df, duplicates_df = create_duplicates_view(df_filtered)
         
         if duplicates_df.empty:
             st.info("No duplicate listings found")
         else:
             st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
-            
-            # Display the styled DataFrame (color-coded)
-            st.dataframe(
-                styled_duplicates_df,
-                use_container_width=True,
-                hide_index=True
-            )
-            
-            # Create a copy for deletion with selection column
-            duplicate_display = duplicates_df.copy().reset_index(drop=True)
-            duplicate_display.insert(0, "Select", False)
-            
-            # Add "Select All" checkbox for duplicates
-            select_all_duplicates = st.checkbox("Select All Duplicate Rows", key="select_all_duplicates")
-            if select_all_duplicates:
-                duplicate_display["Select"] = True
-            
-            # Configure columns for data editor
-            column_config = {
-                "Select": st.column_config.CheckboxColumn(required=True),
-                "SheetRowNum": st.column_config.NumberColumn(disabled=True)
-            }
-            
-            # Display editable dataframe with checkboxes
-            edited_duplicates = st.data_editor(
-                duplicate_display,
-                column_config=column_config,
-                hide_index=True,
-                use_container_width=True,
-                disabled=duplicate_display.columns.difference(["Select"]).tolist()
-            )
-            
-            # Get selected rows
-            selected_duplicates = edited_duplicates[edited_duplicates["Select"]]
-            
-            if not selected_duplicates.empty:
-                st.markdown(f"**{len(selected_duplicates)} duplicate row(s) selected**")
-                
-                # Show delete confirmation with progress bar
-                if st.button("🗑️ Delete Selected Duplicate Rows", type="primary", key="delete_button_duplicates"):
-                    row_nums = selected_duplicates["SheetRowNum"].tolist()
-                    
-                    # Show progress
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    # Delete with progress updates
-                    success = delete_rows_from_sheet(row_nums)
-                    
-                    if success:
-                        progress_bar.progress(100)
-                        status_text.success(f"✅ Successfully deleted {len(selected_duplicates)} duplicate row(s)!")
-                        # Clear cache and refresh
-                        st.cache_data.clear()
-                        st.rerun()
-                    else:
-                        status_text.error("❌ Failed to delete some rows. Please try again.")
+            st.dataframe(styled_duplicates_df, use_container_width=True, hide_index=True)
     else:
         st.info("No listings to analyze for duplicates")
 
+    # WhatsApp section
     st.markdown("---")
     st.subheader("📤 Send WhatsApp Message")
 
     selected_name_whatsapp = st.selectbox("📱 Select Contact to Message", contact_names, key="wa_contact")
     manual_number = st.text_input("Or Enter WhatsApp Number (e.g. 0300xxxxxxx)")
 
-    if st.button("Generate WhatsApp Message"):
+    if st.button("Generate WhatsApp Message", use_container_width=True):
         cleaned = ""
         if manual_number:
             cleaned = clean_number(manual_number)
@@ -306,7 +299,7 @@ def show_plots_manager():
             st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
             st.stop()
 
-        # Use the same filtered dataframe as the main table with intentional filters
+        # Generate WhatsApp messages using the same filtered dataframe
         messages = generate_whatsapp_messages(df_filtered)
         if not messages:
             st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots.")
@@ -320,9 +313,140 @@ def show_plots_manager():
                 
                 encoded = msg.replace(" ", "%20").replace("\n", "%0A")
                 link = f"https://wa.me/{wa_number}?text={encoded}"
-                st.markdown(f"[📩 Send Message {i+1}]({link})", unsafe_allow_html=True)
+                st.markdown(f'<a href="{link}" target="_blank" style="display: inline-block; padding: 0.75rem 1.5rem; background-color: #25D366; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 0.5rem 0;">📩 Send Message {i+1}</a>', 
+                          unsafe_allow_html=True)
                 st.markdown("---")
 
+def show_edit_form(row_data):
+    """Show form to edit a listing"""
+    st.markdown("---")
+    st.subheader("✏️ Edit Listing")
+    
+    with st.form("edit_listing_form"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            sector = st.text_input("Sector", value=row_data.get("Sector", ""))
+            plot_no = st.text_input("Plot No", value=row_data.get("Plot No", ""))
+            street_no = st.text_input("Street No", value=row_data.get("Street No", ""))
+            plot_size = st.text_input("Plot Size", value=row_data.get("Plot Size", ""))
+            demand = st.text_input("Demand", value=row_data.get("Demand", ""))
+        
+        with col2:
+            features = st.text_area("Features", value=row_data.get("Features", ""))
+            property_type = st.text_input("Property Type", value=row_data.get("Property Type", ""))
+            extracted_name = st.text_input("Extracted Name", value=row_data.get("Extracted Name", ""))
+            extracted_contact = st.text_input("Extracted Contact", value=row_data.get("Extracted Contact", ""))
+        
+        submitted = st.form_submit_button("💾 Save Changes")
+        cancel = st.form_submit_button("❌ Cancel")
+        
+        if submitted:
+            # Update the row data
+            updated_row = row_data.copy()
+            updated_row["Sector"] = sector
+            updated_row["Plot No"] = plot_no
+            updated_row["Street No"] = street_no
+            updated_row["Plot Size"] = plot_size
+            updated_row["Demand"] = demand
+            updated_row["Features"] = features
+            updated_row["Property Type"] = property_type
+            updated_row["Extracted Name"] = extracted_name
+            updated_row["Extracted Contact"] = extracted_contact
+            
+            # Save to Google Sheets
+            if update_plot_data(updated_row):
+                st.success("✅ Listing updated successfully!")
+                st.session_state.edit_mode = False
+                st.session_state.editing_row = None
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error("❌ Failed to update listing. Please try again.")
+        
+        if cancel:
+            st.session_state.edit_mode = False
+            st.session_state.editing_row = None
+            st.rerun()
+
+def show_mark_sold_form(rows_data):
+    """Show form to mark listings as sold"""
+    st.markdown("---")
+    st.subheader("✅ Mark as Sold")
+    
+    st.info(f"Marking {len(rows_data)} listing(s) as sold")
+    
+    with st.form("mark_sold_form"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            buyer_name = st.text_input("Buyer Name*", placeholder="Enter buyer's full name")
+            buyer_contact = st.text_input("Buyer Contact", placeholder="Phone number")
+            sale_date = st.date_input("Sale Date", value=datetime.now().date())
+            agent = st.text_input("Agent", value="Current User", placeholder="Agent name")
+        
+        with col2:
+            sale_price = st.number_input("Sale Price (₹)", min_value=0, value=0, step=1000)
+            commission = st.number_input("Commission (₹)", min_value=0, value=0, step=1000)
+            notes = st.text_area("Notes", placeholder="Any additional notes about the sale")
+        
+        submitted = st.form_submit_button("✅ Confirm Sale")
+        cancel = st.form_submit_button("❌ Cancel")
+        
+        if submitted:
+            if not buyer_name:
+                st.error("❌ Buyer Name is required!")
+            else:
+                # Load existing sold data
+                sold_df = load_sold_data()
+                
+                # Add each selected row to sold data
+                for row_data in rows_data:
+                    sold_id = generate_sold_id()
+                    new_sold_record = {
+                        "ID": sold_id,
+                        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Sector": row_data.get("Sector", ""),
+                        "Plot No": row_data.get("Plot No", ""),
+                        "Street No": row_data.get("Street No", ""),
+                        "Plot Size": row_data.get("Plot Size", ""),
+                        "Demand": row_data.get("Demand", ""),
+                        "Features": row_data.get("Features", ""),
+                        "Property Type": row_data.get("Property Type", ""),
+                        "Extracted Name": row_data.get("Extracted Name", ""),
+                        "Extracted Contact": row_data.get("Extracted Contact", ""),
+                        "Buyer Name": buyer_name,
+                        "Buyer Contact": buyer_contact,
+                        "Sale Date": sale_date.strftime("%Y-%m-%d"),
+                        "Sale Price": sale_price,
+                        "Commission": commission,
+                        "Agent": agent,
+                        "Notes": notes,
+                        "Original Row Num": row_data.get("SheetRowNum", "")
+                    }
+                    
+                    sold_df = pd.concat([sold_df, pd.DataFrame([new_sold_record])], ignore_index=True)
+                
+                # Save sold data
+                if save_sold_data(sold_df):
+                    # Delete from plots sheet
+                    row_nums = [row["SheetRowNum"] for row in rows_data]
+                    if delete_rows_from_sheet(row_nums):
+                        st.success(f"✅ Successfully marked {len(rows_data)} listing(s) as sold!")
+                        st.session_state.mark_sold_mode = False
+                        st.session_state.mark_sold_rows = None
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to remove listings from plots sheet.")
+                else:
+                    st.error("❌ Failed to save sold data. Please try again.")
+        
+        if cancel:
+            st.session_state.mark_sold_mode = False
+            st.session_state.mark_sold_rows = None
+            st.rerun()
+
 # Import required modules
-import re
 from utils import fuzzy_feature_match
+from datetime import datetime
