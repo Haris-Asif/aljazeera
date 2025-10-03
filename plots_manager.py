@@ -7,6 +7,8 @@ from utils import (load_plot_data, load_contacts, delete_rows_from_sheet,
                   get_all_unique_features, filter_by_date, create_duplicates_view,
                   parse_price, update_plot_data, load_sold_data, save_sold_data,
                   generate_sold_id)
+from utils import fuzzy_feature_match
+from datetime import datetime
 
 def show_plots_manager():
     st.header("🏠 Plots Management")
@@ -250,7 +252,7 @@ def show_plots_manager():
     
     st.info(f"📊 **Total filtered listings:** {len(df_filtered)} | ✅ **WhatsApp eligible:** {whatsapp_eligible_count}")
     
-    # Action buttons for selected rows - FIXED: Proper selection handling
+    # FIXED: Improved selection and deletion handling
     if not df_filtered.empty:
         display_df = df_filtered.copy().reset_index(drop=True)
         display_df.insert(0, "Select", False)
@@ -268,9 +270,6 @@ def show_plots_manager():
                                     disabled=len(st.session_state.selected_rows) == 0 and not select_all,
                                     key="mark_sold_btn")
         
-        if select_all:
-            display_df["Select"] = True
-        
         # Configure columns for data editor
         column_config = {
             "Select": st.column_config.CheckboxColumn(required=True),
@@ -287,7 +286,7 @@ def show_plots_manager():
             key="plots_data_editor"
         )
         
-        # Get selected rows - FIXED: Proper selection tracking
+        # FIXED: Get selected rows properly from the edited dataframe
         selected_indices = edited_df[edited_df["Select"]].index.tolist()
         
         # Update session state with selected indices
@@ -296,10 +295,11 @@ def show_plots_manager():
         else:
             st.session_state.selected_rows = selected_indices
         
+        # Display selection info and handle actions
         if st.session_state.selected_rows:
             st.success(f"**{len(st.session_state.selected_rows)} row(s) selected**")
             
-            # Handle Edit action - FIXED: Proper button handling
+            # Handle Edit action
             if edit_btn:
                 if len(st.session_state.selected_rows) == 1:
                     st.session_state.edit_mode = True
@@ -308,11 +308,38 @@ def show_plots_manager():
                 else:
                     st.warning("Please select only one row to edit.")
             
-            # Handle Mark as Sold action - FIXED: Proper button handling
+            # Handle Mark as Sold action
             if mark_sold_btn:
                 st.session_state.mark_sold_mode = True
                 st.session_state.mark_sold_rows = [display_df.iloc[idx].to_dict() for idx in st.session_state.selected_rows]
                 st.rerun()
+            
+            # FIXED: Row deletion with proper row number extraction
+            if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_button_main"):
+                # Get the actual SheetRowNum values from the selected rows
+                selected_display_rows = [display_df.iloc[idx] for idx in st.session_state.selected_rows]
+                row_nums = [row["SheetRowNum"] for row in selected_display_rows]
+                
+                # Confirm deletion
+                with st.expander("⚠️ Confirm Deletion", expanded=True):
+                    st.warning(f"You are about to delete {len(row_nums)} row(s). This action cannot be undone!")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("✅ Confirm Delete", type="primary", use_container_width=True):
+                            success = delete_rows_from_sheet(row_nums)
+                            
+                            if success:
+                                st.success(f"✅ Successfully deleted {len(row_nums)} row(s)!")
+                                st.session_state.selected_rows = []
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to delete some rows. Please try again.")
+                    
+                    with col2:
+                        if st.button("❌ Cancel", use_container_width=True):
+                            st.info("Deletion cancelled")
         
         # Edit Form
         if st.session_state.get('edit_mode') and st.session_state.editing_row:
@@ -322,24 +349,6 @@ def show_plots_manager():
         if st.session_state.get('mark_sold_mode') and st.session_state.mark_sold_rows:
             show_mark_sold_form(st.session_state.mark_sold_rows)
             
-        # Row deletion feature
-        if st.session_state.selected_rows:
-            if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_button_main"):
-                row_nums = [display_df.iloc[idx]["SheetRowNum"] for idx in st.session_state.selected_rows]
-                
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                success = delete_rows_from_sheet(row_nums)
-                
-                if success:
-                    progress_bar.progress(100)
-                    status_text.success(f"✅ Successfully deleted {len(st.session_state.selected_rows)} row(s)!")
-                    st.cache_data.clear()
-                    st.session_state.selected_rows = []
-                    st.rerun()
-                else:
-                    status_text.error("❌ Failed to delete some rows. Please try again.")
     else:
         st.info("No listings match your filters")
     
@@ -540,7 +549,3 @@ def show_mark_sold_form(rows_data):
             st.session_state.mark_sold_mode = False
             st.session_state.mark_sold_rows = None
             st.rerun()
-
-# Import required modules
-from utils import fuzzy_feature_match
-from datetime import datetime
