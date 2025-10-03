@@ -671,89 +671,129 @@ def add_contacts_batch(contacts_batch):
         return 0
 
 def delete_contacts_from_sheet(row_numbers):
+    """Delete rows from Contacts sheet with improved error handling"""
     try:
         client = get_gsheet_client()
         if not client:
+            st.error("❌ Failed to connect to Google Sheets")
             return False
             
         sheet = client.open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
         valid_rows = [row_num for row_num in row_numbers if row_num > 1]
         
         if not valid_rows:
+            st.warning("⚠️ No valid rows to delete")
             return True
             
-        valid_rows.sort(reverse=True)
+        valid_rows.sort(reverse=True)  # Delete from bottom to avoid shifting issues
         
-        for i in range(0, len(valid_rows), BATCH_SIZE):
-            batch = valid_rows[i:i+BATCH_SIZE]
-            for row_num in batch:
-                try:
-                    sheet.delete_rows(row_num)
-                    time.sleep(API_DELAY)
-                except HttpError as e:
-                    if e.resp.status == 429:
-                        st.warning("Google Sheets API quota exceeded. Waiting before retrying...")
-                        time.sleep(10)
-                        try:
-                            sheet.delete_rows(row_num)
-                        except:
-                            continue
-                    else:
-                        st.error(f"Error deleting row {row_num}: {str(e)}")
+        successful_deletes = 0
+        total_rows = len(valid_rows)
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for i, row_num in enumerate(valid_rows):
+            try:
+                status_text.info(f"🗑️ Deleting contact row {row_num}... ({i+1}/{total_rows})")
+                sheet.delete_rows(row_num)
+                successful_deletes += 1
+                progress_bar.progress((i + 1) / total_rows)
+                time.sleep(API_DELAY)
+            except HttpError as e:
+                if e.resp.status == 429:
+                    st.warning("⏳ Google Sheets API quota exceeded. Waiting before retrying...")
+                    time.sleep(10)
+                    try:
+                        sheet.delete_rows(row_num)
+                        successful_deletes += 1
+                        progress_bar.progress((i + 1) / total_rows)
+                        time.sleep(API_DELAY)
+                    except Exception as e2:
+                        st.error(f"❌ Error deleting contact row {row_num} even after retry: {str(e2)}")
                         continue
-                except Exception as e:
-                    st.error(f"Error deleting row {row_num}: {str(e)}")
+                else:
+                    st.error(f"❌ HTTP Error deleting contact row {row_num}: {str(e)}")
                     continue
-                    
-            time.sleep(API_DELAY)
-            
+            except Exception as e:
+                st.error(f"❌ Error deleting contact row {row_num}: {str(e)}")
+                continue
+        
+        # Clear cache to refresh data
         st.cache_data.clear()
-        return True
+        
+        if successful_deletes == total_rows:
+            status_text.success(f"✅ Successfully deleted {successful_deletes} contact(s)!")
+            return True
+        else:
+            status_text.warning(f"⚠️ Deleted {successful_deletes} out of {total_rows} contacts. Some rows may have failed.")
+            return False
+            
     except Exception as e:
-        st.error(f"Error in delete operation: {str(e)}")
+        st.error(f"❌ Error in delete operation: {str(e)}")
         return False
 
 def delete_rows_from_sheet(row_numbers):
+    """Delete rows from Plots sheet with improved error handling"""
     try:
         client = get_gsheet_client()
         if not client:
+            st.error("❌ Failed to connect to Google Sheets")
             return False
             
         sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
         valid_rows = [row_num for row_num in row_numbers if row_num > 1]
         
         if not valid_rows:
+            st.warning("⚠️ No valid rows to delete")
             return True
             
-        valid_rows.sort(reverse=True)
+        valid_rows.sort(reverse=True)  # Delete from bottom to avoid shifting issues
         
-        for i in range(0, len(valid_rows), BATCH_SIZE):
-            batch = valid_rows[i:i+BATCH_SIZE]
-            for row_num in batch:
-                try:
-                    sheet.delete_rows(row_num)
-                    time.sleep(API_DELAY)
-                except HttpError as e:
-                    if e.resp.status == 429:
-                        st.warning("Google Sheets API quota exceeded. Waiting before retrying...")
-                        time.sleep(10)
-                        try:
-                            sheet.delete_rows(row_num)
-                        except:
-                            continue
-                    else:
-                        st.error(f"Error deleting row {row_num}: {str(e)}")
+        successful_deletes = 0
+        total_rows = len(valid_rows)
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for i, row_num in enumerate(valid_rows):
+            try:
+                status_text.info(f"🗑️ Deleting row {row_num}... ({i+1}/{total_rows})")
+                sheet.delete_rows(row_num)
+                successful_deletes += 1
+                progress_bar.progress((i + 1) / total_rows)
+                time.sleep(API_DELAY)
+            except HttpError as e:
+                if e.resp.status == 429:
+                    st.warning("⏳ Google Sheets API quota exceeded. Waiting before retrying...")
+                    time.sleep(10)
+                    try:
+                        sheet.delete_rows(row_num)
+                        successful_deletes += 1
+                        progress_bar.progress((i + 1) / total_rows)
+                        time.sleep(API_DELAY)
+                    except Exception as e2:
+                        st.error(f"❌ Error deleting row {row_num} even after retry: {str(e2)}")
                         continue
-                except Exception as e:
-                    st.error(f"Error deleting row {row_num}: {str(e)}")
+                else:
+                    st.error(f"❌ HTTP Error deleting row {row_num}: {str(e)}")
                     continue
-                    
-            time.sleep(API_DELAY)
-            
+            except Exception as e:
+                st.error(f"❌ Error deleting row {row_num}: {str(e)}")
+                continue
+        
+        # Clear cache to refresh data
         st.cache_data.clear()
-        return True
+        
+        if successful_deletes == total_rows:
+            status_text.success(f"✅ Successfully deleted {successful_deletes} row(s)!")
+            return True
+        else:
+            status_text.warning(f"⚠️ Deleted {successful_deletes} out of {total_rows} rows. Some rows may have failed.")
+            return False
+            
     except Exception as e:
-        st.error(f"Error in delete operation: {str(e)}")
+        st.error(f"❌ Error in delete operation: {str(e)}")
         return False
 
 # WhatsApp message generation with I-15 Street No sorting fix
