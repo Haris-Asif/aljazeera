@@ -252,10 +252,15 @@ def show_plots_manager():
     
     st.info(f"📊 **Total filtered listings:** {len(df_filtered)} | ✅ **WhatsApp eligible:** {whatsapp_eligible_count}")
     
-    # FIXED: SIMPLIFIED DELETION PROCESS
+    # FIXED: SIMPLIFIED DELETION PROCESS WITH DATA TYPE FIXES
     if not df_filtered.empty:
         display_df = df_filtered.copy().reset_index(drop=True)
         display_df.insert(0, "Select", False)
+        
+        # Ensure all data types are consistent for display
+        for col in display_df.columns:
+            if display_df[col].dtype == "object":
+                display_df[col] = display_df[col].astype(str)
         
         # Action buttons row
         col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
@@ -279,7 +284,7 @@ def show_plots_manager():
             display_df,
             column_config=column_config,
             hide_index=True,
-            use_container_width=True,
+            width='stretch',
             disabled=display_df.columns.difference(["Select"]).tolist(),
             key="plots_data_editor"
         )
@@ -316,7 +321,7 @@ def show_plots_manager():
             if delete_btn:
                 # Get the actual SheetRowNum values from the selected rows
                 selected_display_rows = [display_df.iloc[idx] for idx in st.session_state.selected_rows]
-                row_nums = [row["SheetRowNum"] for row in selected_display_rows]
+                row_nums = [int(row["SheetRowNum"]) for row in selected_display_rows]
                 
                 # Show deletion confirmation
                 st.warning(f"🗑️ Deleting {len(row_nums)} selected row(s)...")
@@ -355,7 +360,7 @@ def show_plots_manager():
             st.info("No duplicate listings found")
         else:
             st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
-            st.dataframe(styled_duplicates_df, use_container_width=True, hide_index=True)
+            st.dataframe(styled_duplicates_df, width='stretch', hide_index=True)
     else:
         st.info("No listings to analyze for duplicates")
 
@@ -366,7 +371,7 @@ def show_plots_manager():
     selected_name_whatsapp = st.selectbox("📱 Select Contact to Message", contact_names, key="wa_contact")
     manual_number = st.text_input("Or Enter WhatsApp Number (e.g. 0300xxxxxxx)")
 
-    if st.button("Generate WhatsApp Message", use_container_width=True):
+    if st.button("Generate WhatsApp Message", width='stretch'):
         cleaned = ""
         if manual_number:
             cleaned = clean_number(manual_number)
