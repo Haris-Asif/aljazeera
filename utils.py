@@ -670,8 +670,9 @@ def add_contacts_batch(contacts_batch):
         st.error(f"Error in batch operation: {str(e)}")
         return 0
 
+# SIMPLIFIED DELETE FUNCTIONS - FIXED
 def delete_contacts_from_sheet(row_numbers):
-    """Delete rows from Contacts sheet with improved error handling"""
+    """Delete rows from Contacts sheet"""
     try:
         client = get_gsheet_client()
         if not client:
@@ -679,62 +680,26 @@ def delete_contacts_from_sheet(row_numbers):
             return False
             
         sheet = client.open(SPREADSHEET_NAME).worksheet(CONTACTS_SHEET)
-        valid_rows = [row_num for row_num in row_numbers if row_num > 1]
         
-        if not valid_rows:
-            st.warning("⚠️ No valid rows to delete")
-            return True
-            
-        valid_rows.sort(reverse=True)  # Delete from bottom to avoid shifting issues
-        
-        successful_deletes = 0
-        total_rows = len(valid_rows)
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        for i, row_num in enumerate(valid_rows):
+        # Delete rows in reverse order to avoid index shifting
+        for row_num in sorted(row_numbers, reverse=True):
             try:
-                status_text.info(f"🗑️ Deleting contact row {row_num}... ({i+1}/{total_rows})")
                 sheet.delete_rows(row_num)
-                successful_deletes += 1
-                progress_bar.progress((i + 1) / total_rows)
                 time.sleep(API_DELAY)
-            except HttpError as e:
-                if e.resp.status == 429:
-                    st.warning("⏳ Google Sheets API quota exceeded. Waiting before retrying...")
-                    time.sleep(10)
-                    try:
-                        sheet.delete_rows(row_num)
-                        successful_deletes += 1
-                        progress_bar.progress((i + 1) / total_rows)
-                        time.sleep(API_DELAY)
-                    except Exception as e2:
-                        st.error(f"❌ Error deleting contact row {row_num} even after retry: {str(e2)}")
-                        continue
-                else:
-                    st.error(f"❌ HTTP Error deleting contact row {row_num}: {str(e)}")
-                    continue
             except Exception as e:
-                st.error(f"❌ Error deleting contact row {row_num}: {str(e)}")
+                st.error(f"❌ Error deleting row {row_num}: {str(e)}")
                 continue
         
         # Clear cache to refresh data
         st.cache_data.clear()
+        return True
         
-        if successful_deletes == total_rows:
-            status_text.success(f"✅ Successfully deleted {successful_deletes} contact(s)!")
-            return True
-        else:
-            status_text.warning(f"⚠️ Deleted {successful_deletes} out of {total_rows} contacts. Some rows may have failed.")
-            return False
-            
     except Exception as e:
         st.error(f"❌ Error in delete operation: {str(e)}")
         return False
 
 def delete_rows_from_sheet(row_numbers):
-    """Delete rows from Plots sheet with improved error handling"""
+    """Delete rows from Plots sheet - SIMPLIFIED AND FIXED"""
     try:
         client = get_gsheet_client()
         if not client:
@@ -742,56 +707,20 @@ def delete_rows_from_sheet(row_numbers):
             return False
             
         sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
-        valid_rows = [row_num for row_num in row_numbers if row_num > 1]
         
-        if not valid_rows:
-            st.warning("⚠️ No valid rows to delete")
-            return True
-            
-        valid_rows.sort(reverse=True)  # Delete from bottom to avoid shifting issues
-        
-        successful_deletes = 0
-        total_rows = len(valid_rows)
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        for i, row_num in enumerate(valid_rows):
+        # Delete rows in reverse order to avoid index shifting issues
+        for row_num in sorted(row_numbers, reverse=True):
             try:
-                status_text.info(f"🗑️ Deleting row {row_num}... ({i+1}/{total_rows})")
                 sheet.delete_rows(row_num)
-                successful_deletes += 1
-                progress_bar.progress((i + 1) / total_rows)
-                time.sleep(API_DELAY)
-            except HttpError as e:
-                if e.resp.status == 429:
-                    st.warning("⏳ Google Sheets API quota exceeded. Waiting before retrying...")
-                    time.sleep(10)
-                    try:
-                        sheet.delete_rows(row_num)
-                        successful_deletes += 1
-                        progress_bar.progress((i + 1) / total_rows)
-                        time.sleep(API_DELAY)
-                    except Exception as e2:
-                        st.error(f"❌ Error deleting row {row_num} even after retry: {str(e2)}")
-                        continue
-                else:
-                    st.error(f"❌ HTTP Error deleting row {row_num}: {str(e)}")
-                    continue
+                time.sleep(API_DELAY)  # Small delay to avoid API limits
             except Exception as e:
                 st.error(f"❌ Error deleting row {row_num}: {str(e)}")
                 continue
         
         # Clear cache to refresh data
         st.cache_data.clear()
+        return True
         
-        if successful_deletes == total_rows:
-            status_text.success(f"✅ Successfully deleted {successful_deletes} row(s)!")
-            return True
-        else:
-            status_text.warning(f"⚠️ Deleted {successful_deletes} out of {total_rows} rows. Some rows may have failed.")
-            return False
-            
     except Exception as e:
         st.error(f"❌ Error in delete operation: {str(e)}")
         return False
@@ -1088,7 +1017,6 @@ def display_lead_analytics(leads_df, activities_df):
             st.info("No activities data available.")
     else:
         st.info("No activities data available.")
-# Add these functions to your existing utils.py file
 
 def fuzzy_feature_match(row_features, selected_features):
     """Fuzzy match features with safety checks"""
