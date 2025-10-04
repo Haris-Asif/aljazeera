@@ -252,23 +252,21 @@ def show_plots_manager():
     
     st.info(f"📊 **Total filtered listings:** {len(df_filtered)} | ✅ **WhatsApp eligible:** {whatsapp_eligible_count}")
     
-    # FIXED: Improved selection and deletion handling
+    # FIXED: SIMPLIFIED DELETION PROCESS
     if not df_filtered.empty:
         display_df = df_filtered.copy().reset_index(drop=True)
         display_df.insert(0, "Select", False)
         
-        # Add "Select All" checkbox
-        col1, col2, col3 = st.columns([2, 1, 1])
+        # Action buttons row
+        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
         with col1:
             select_all = st.checkbox("Select All Rows", key="select_all_main")
         with col2:
-            edit_btn = st.button("✏️ Edit Selected", use_container_width=True, 
-                               disabled=len(st.session_state.selected_rows) == 0 and not select_all,
-                               key="edit_selected_btn")
+            edit_btn = st.button("✏️ Edit Selected", use_container_width=True, key="edit_selected_btn")
         with col3:
-            mark_sold_btn = st.button("✅ Mark as Sold", use_container_width=True, 
-                                    disabled=len(st.session_state.selected_rows) == 0 and not select_all,
-                                    key="mark_sold_btn")
+            mark_sold_btn = st.button("✅ Mark as Sold", use_container_width=True, key="mark_sold_btn")
+        with col4:
+            delete_btn = st.button("🗑️ Delete Selected", type="primary", use_container_width=True, key="delete_button_main")
         
         # Configure columns for data editor
         column_config = {
@@ -286,7 +284,7 @@ def show_plots_manager():
             key="plots_data_editor"
         )
         
-        # FIXED: Get selected rows properly from the edited dataframe
+        # Get selected rows from the edited dataframe
         selected_indices = edited_df[edited_df["Select"]].index.tolist()
         
         # Update session state with selected indices
@@ -295,7 +293,7 @@ def show_plots_manager():
         else:
             st.session_state.selected_rows = selected_indices
         
-        # Display selection info and handle actions
+        # Display selection info
         if st.session_state.selected_rows:
             st.success(f"**{len(st.session_state.selected_rows)} row(s) selected**")
             
@@ -314,32 +312,26 @@ def show_plots_manager():
                 st.session_state.mark_sold_rows = [display_df.iloc[idx].to_dict() for idx in st.session_state.selected_rows]
                 st.rerun()
             
-            # FIXED: Row deletion with proper row number extraction
-            if st.button("🗑️ Delete Selected Rows", type="primary", key="delete_button_main"):
+            # FIXED: SIMPLE DELETE BUTTON - DIRECT ACTION
+            if delete_btn:
                 # Get the actual SheetRowNum values from the selected rows
                 selected_display_rows = [display_df.iloc[idx] for idx in st.session_state.selected_rows]
                 row_nums = [row["SheetRowNum"] for row in selected_display_rows]
                 
-                # Confirm deletion
-                with st.expander("⚠️ Confirm Deletion", expanded=True):
-                    st.warning(f"You are about to delete {len(row_nums)} row(s). This action cannot be undone!")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button("✅ Confirm Delete", type="primary", use_container_width=True):
-                            success = delete_rows_from_sheet(row_nums)
-                            
-                            if success:
-                                st.success(f"✅ Successfully deleted {len(row_nums)} row(s)!")
-                                st.session_state.selected_rows = []
-                                st.cache_data.clear()
-                                st.rerun()
-                            else:
-                                st.error("❌ Failed to delete some rows. Please try again.")
-                    
-                    with col2:
-                        if st.button("❌ Cancel", use_container_width=True):
-                            st.info("Deletion cancelled")
+                # Show deletion confirmation
+                st.warning(f"🗑️ Deleting {len(row_nums)} selected row(s)...")
+                
+                # Perform deletion
+                success = delete_rows_from_sheet(row_nums)
+                
+                if success:
+                    st.success(f"✅ Successfully deleted {len(row_nums)} row(s)!")
+                    # Clear selection and refresh
+                    st.session_state.selected_rows = []
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to delete rows. Please try again.")
         
         # Edit Form
         if st.session_state.get('edit_mode') and st.session_state.editing_row:
