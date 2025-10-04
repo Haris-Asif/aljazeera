@@ -178,7 +178,7 @@ def main():
     if "crm_subtab" not in st.session_state:
         st.session_state.crm_subtab = None
     
-    # Create sidebar navigation
+    # Create sidebar navigation - FIXED: Removed duplicate names
     with st.sidebar:
         st.markdown("""
         <div style='text-align: center; margin-bottom: 2rem;'>
@@ -187,13 +187,13 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
-        # Sidebar menu with icons
+        # Sidebar menu with icons - FIXED: Only show icon + name once
         menu_options = [
-            ("📊 Dashboard", "Dashboard"),
-            ("🏠 Plots", "Plots"), 
-            ("👥 Contacts", "Contacts"),
-            ("🎯 Leads Management", "Leads Management"),
-            ("✅ Closed Deals", "Closed Deals")
+            ("📊", "Dashboard"),
+            ("🏠", "Plots"), 
+            ("👥", "Contacts"),
+            ("🎯", "Leads Management"),
+            ("✅", "Closed Deals")
         ]
         
         for icon, tab_name in menu_options:
