@@ -112,12 +112,16 @@ def sector_matches(f, c):
     return f in c if "/" not in f else f == c
 
 def safe_dataframe(df):
+    """Ensure DataFrame has consistent data types for Arrow compatibility"""
     try:
         df = df.copy()
         df = df.drop(columns=["ParsedDate", "ParsedPrice"], errors="ignore")
+        
+        # Convert all object columns to string to avoid mixed type issues
         for col in df.columns:
             if df[col].dtype == "object":
                 df[col] = df[col].astype(str)
+        
         return df
     except Exception as e:
         st.error(f"⚠️ Error displaying table: {e}")
@@ -307,6 +311,17 @@ def load_plot_data():
         df = pd.DataFrame(sheet.get_all_records())
         if not df.empty:
             df["SheetRowNum"] = [i + 2 for i in range(len(df))]
+            
+            # Ensure consistent data types for problematic columns
+            if "Plot No" in df.columns:
+                df["Plot No"] = df["Plot No"].astype(str)
+            if "Street No" in df.columns:
+                df["Street No"] = df["Street No"].astype(str)
+            if "Plot Size" in df.columns:
+                df["Plot Size"] = df["Plot Size"].astype(str)
+            if "Sector" in df.columns:
+                df["Sector"] = df["Sector"].astype(str)
+                
         return df
     except Exception as e:
         st.error(f"Error loading plot data: {str(e)}")
@@ -323,6 +338,12 @@ def load_contacts():
         df = pd.DataFrame(sheet.get_all_records())
         if not df.empty:
             df["SheetRowNum"] = [i + 2 for i in range(len(df))]
+            
+            # Ensure consistent data types
+            for col in df.columns:
+                if df[col].dtype == "object":
+                    df[col] = df[col].astype(str)
+                    
         return df
     except Exception as e:
         st.error(f"Error loading contacts: {str(e)}")
@@ -352,6 +373,13 @@ def load_sold_data():
         df = pd.DataFrame(sheet.get_all_records())
         if not df.empty:
             df["SheetRowNum"] = [i + 2 for i in range(len(df))]
+            
+            # Ensure consistent data types
+            if "Plot No" in df.columns:
+                df["Plot No"] = df["Plot No"].astype(str)
+            if "Street No" in df.columns:
+                df["Street No"] = df["Street No"].astype(str)
+                
         return df
     except Exception as e:
         st.error(f"Error loading sold data: {str(e)}")
@@ -379,6 +407,12 @@ def load_leads():
             return pd.DataFrame(columns=headers)
             
         df = pd.DataFrame(sheet.get_all_records())
+        
+        # Ensure consistent data types
+        for col in df.columns:
+            if df[col].dtype == "object":
+                df[col] = df[col].astype(str)
+                
         return df
     except Exception as e:
         st.error(f"Error loading leads: {str(e)}")
@@ -404,6 +438,12 @@ def load_lead_activities():
             return pd.DataFrame(columns=headers)
             
         df = pd.DataFrame(sheet.get_all_records())
+        
+        # Ensure consistent data types
+        for col in df.columns:
+            if df[col].dtype == "object":
+                df[col] = df[col].astype(str)
+                
         return df
     except Exception as e:
         st.error(f"Error loading lead activities: {str(e)}")
@@ -429,6 +469,12 @@ def load_tasks():
             return pd.DataFrame(columns=headers)
             
         df = pd.DataFrame(sheet.get_all_records())
+        
+        # Ensure consistent data types
+        for col in df.columns:
+            if df[col].dtype == "object":
+                df[col] = df[col].astype(str)
+                
         return df
     except Exception as e:
         st.error(f"Error loading tasks: {str(e)}")
@@ -455,6 +501,12 @@ def load_appointments():
             return pd.DataFrame(columns=headers)
             
         df = pd.DataFrame(sheet.get_all_records())
+        
+        # Ensure consistent data types
+        for col in df.columns:
+            if df[col].dtype == "object":
+                df[col] = df[col].astype(str)
+                
         return df
     except Exception as e:
         st.error(f"Error loading appointments: {str(e)}")
