@@ -16,6 +16,7 @@ def show_plots_manager():
     # Load data
     df = load_plot_data().fillna("")
     contacts_df = load_contacts()
+    sold_df = load_sold_data()
     
     # Add row numbers to contacts for deletion
     if not contacts_df.empty:
@@ -349,9 +350,115 @@ def show_plots_manager():
     else:
         st.info("No listings match your filters")
     
-    # Duplicates section
+    # NEW: Incomplete Listings Section
     st.markdown("---")
-    st.subheader("👥 Duplicate Listings Detection")
+    st.subheader("❌ Incomplete Listings")
+    
+    if not df.empty:
+        # Identify incomplete listings (missing required fields for WhatsApp)
+        incomplete_listings = []
+        for _, row in df.iterrows():
+            sector = str(row.get("Sector", "")).strip()
+            plot_no = str(row.get("Plot No", "")).strip()
+            size = str(row.get("Plot Size", "")).strip()
+            price = str(row.get("Demand", "")).strip()
+            street = str(row.get("Street No", "")).strip()
+            
+            # Check if listing is incomplete
+            missing_fields = []
+            if not sector:
+                missing_fields.append("Sector")
+            if not plot_no:
+                missing_fields.append("Plot No")
+            if not size:
+                missing_fields.append("Plot Size")
+            if not price:
+                missing_fields.append("Demand")
+            if "I-15/" in sector and not street:
+                missing_fields.append("Street No")
+            if "series" in plot_no.lower():
+                missing_fields.append("Valid Plot No")
+            
+            if missing_fields:
+                row_dict = row.to_dict()
+                row_dict["Missing Fields"] = ", ".join(missing_fields)
+                incomplete_listings.append(row_dict)
+        
+        incomplete_df = pd.DataFrame(incomplete_listings)
+        
+        if not incomplete_df.empty:
+            st.info(f"Found {len(incomplete_df)} listings with missing information")
+            
+            # Display incomplete listings with checkboxes
+            incomplete_display_df = incomplete_df.copy().reset_index(drop=True)
+            incomplete_display_df.insert(0, "Select", False)
+            
+            # Action buttons for incomplete listings
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                incomplete_select_all = st.checkbox("Select All Incomplete", key="select_all_incomplete")
+            with col2:
+                incomplete_edit_btn = st.button("✏️ Edit Selected", use_container_width=True, key="edit_incomplete_btn")
+            with col3:
+                incomplete_delete_btn = st.button("🗑️ Delete Selected", type="primary", use_container_width=True, key="delete_incomplete_btn")
+            
+            # Configure columns for incomplete data editor
+            incomplete_column_config = {
+                "Select": st.column_config.CheckboxColumn(required=True),
+                "SheetRowNum": st.column_config.NumberColumn(disabled=True),
+                "Missing Fields": st.column_config.TextColumn(disabled=True)
+            }
+            
+            # Display incomplete listings
+            incomplete_edited_df = st.data_editor(
+                incomplete_display_df,
+                column_config=incomplete_column_config,
+                hide_index=True,
+                use_container_width=True,
+                disabled=incomplete_display_df.columns.difference(["Select"]).tolist(),
+                key="incomplete_data_editor"
+            )
+            
+            # Get selected incomplete rows
+            incomplete_selected_indices = incomplete_edited_df[incomplete_edited_df["Select"]].index.tolist()
+            
+            if incomplete_select_all:
+                incomplete_selected_indices = list(range(len(incomplete_display_df)))
+            
+            # Handle incomplete listing actions
+            if incomplete_selected_indices:
+                st.success(f"**{len(incomplete_selected_indices)} incomplete listing(s) selected**")
+                
+                if incomplete_edit_btn:
+                    if len(incomplete_selected_indices) == 1:
+                        st.session_state.edit_mode = True
+                        st.session_state.editing_row = incomplete_display_df.iloc[incomplete_selected_indices[0]].to_dict()
+                        st.rerun()
+                    else:
+                        st.warning("Please select only one row to edit.")
+                
+                if incomplete_delete_btn:
+                    selected_incomplete_rows = [incomplete_display_df.iloc[idx] for idx in incomplete_selected_indices]
+                    incomplete_row_nums = [int(row["SheetRowNum"]) for row in selected_incomplete_rows]
+                    
+                    st.warning(f"🗑️ Deleting {len(incomplete_row_nums)} selected incomplete listing(s)...")
+                    
+                    success = delete_rows_from_sheet(incomplete_row_nums)
+                    
+                    if success:
+                        st.success(f"✅ Successfully deleted {len(incomplete_row_nums)} incomplete listing(s)!")
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to delete incomplete listings. Please try again.")
+        else:
+            st.info("🎉 All listings have complete information!")
+    else:
+        st.info("No listings available to check for completeness")
+    
+    # NEW: Duplicate Listings Section with Checkboxes
+    st.markdown("---")
+    st.subheader("👥 Duplicate Listings")
     
     if not df_filtered.empty:
         styled_duplicates_df, duplicates_df = create_duplicates_view(df_filtered)
@@ -359,10 +466,134 @@ def show_plots_manager():
         if duplicates_df.empty:
             st.info("No duplicate listings found")
         else:
-            st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
-            st.dataframe(styled_duplicates_df, width='stretch', hide_index=True)
+            st.info("Showing duplicate listings with matching Sector, Plot No, Street No and Plot Size")
+            
+            # Display duplicates with checkboxes
+            duplicates_display_df = duplicates_df.copy().reset_index(drop=True)
+            duplicates_display_df.insert(0, "Select", False)
+            
+            # Action buttons for duplicates
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                duplicates_select_all = st.checkbox("Select All Duplicates", key="select_all_duplicates")
+            with col2:
+                duplicates_edit_btn = st.button("✏️ Edit Selected", use_container_width=True, key="edit_duplicates_btn")
+            with col3:
+                duplicates_delete_btn = st.button("🗑️ Delete Selected", type="primary", use_container_width=True, key="delete_duplicates_btn")
+            
+            # Configure columns for duplicates data editor
+            duplicates_column_config = {
+                "Select": st.column_config.CheckboxColumn(required=True),
+                "SheetRowNum": st.column_config.NumberColumn(disabled=True),
+                "GroupKey": st.column_config.TextColumn(disabled=True)
+            }
+            
+            # Display duplicates with checkboxes
+            duplicates_edited_df = st.data_editor(
+                duplicates_display_df,
+                column_config=duplicates_column_config,
+                hide_index=True,
+                use_container_width=True,
+                disabled=duplicates_display_df.columns.difference(["Select"]).tolist(),
+                key="duplicates_data_editor"
+            )
+            
+            # Get selected duplicate rows
+            duplicates_selected_indices = duplicates_edited_df[duplicates_edited_df["Select"]].index.tolist()
+            
+            if duplicates_select_all:
+                duplicates_selected_indices = list(range(len(duplicates_display_df)))
+            
+            # Handle duplicate listing actions
+            if duplicates_selected_indices:
+                st.success(f"**{len(duplicates_selected_indices)} duplicate listing(s) selected**")
+                
+                if duplicates_edit_btn:
+                    if len(duplicates_selected_indices) == 1:
+                        st.session_state.edit_mode = True
+                        st.session_state.editing_row = duplicates_display_df.iloc[duplicates_selected_indices[0]].to_dict()
+                        st.rerun()
+                    else:
+                        st.warning("Please select only one row to edit.")
+                
+                if duplicates_delete_btn:
+                    selected_duplicate_rows = [duplicates_display_df.iloc[idx] for idx in duplicates_selected_indices]
+                    duplicate_row_nums = [int(row["SheetRowNum"]) for row in selected_duplicate_rows]
+                    
+                    st.warning(f"🗑️ Deleting {len(duplicate_row_nums)} selected duplicate listing(s)...")
+                    
+                    success = delete_rows_from_sheet(duplicate_row_nums)
+                    
+                    if success:
+                        st.success(f"✅ Successfully deleted {len(duplicate_row_nums)} duplicate listing(s)!")
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to delete duplicate listings. Please try again.")
     else:
         st.info("No listings to analyze for duplicates")
+
+    # NEW: Sold Listings Section
+    st.markdown("---")
+    st.subheader("✅ Sold Listings")
+    
+    if not sold_df.empty:
+        st.info(f"Showing {len(sold_df)} sold listings")
+        
+        # Display sold listings
+        sold_display_df = sold_df.copy().reset_index(drop=True)
+        sold_display_df.insert(0, "Select", False)
+        
+        # Action buttons for sold listings
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            sold_select_all = st.checkbox("Select All Sold", key="select_all_sold")
+        with col2:
+            sold_delete_btn = st.button("🗑️ Delete Selected", type="primary", use_container_width=True, key="delete_sold_btn")
+        
+        # Configure columns for sold data editor
+        sold_column_config = {
+            "Select": st.column_config.CheckboxColumn(required=True),
+            "SheetRowNum": st.column_config.NumberColumn(disabled=True)
+        }
+        
+        # Display sold listings with checkboxes
+        sold_edited_df = st.data_editor(
+            sold_display_df,
+            column_config=sold_column_config,
+            hide_index=True,
+            use_container_width=True,
+            disabled=sold_display_df.columns.difference(["Select"]).tolist(),
+            key="sold_data_editor"
+        )
+        
+        # Get selected sold rows
+        sold_selected_indices = sold_edited_df[sold_edited_df["Select"]].index.tolist()
+        
+        if sold_select_all:
+            sold_selected_indices = list(range(len(sold_display_df)))
+        
+        # Handle sold listing actions
+        if sold_selected_indices:
+            st.success(f"**{len(sold_selected_indices)} sold listing(s) selected**")
+            
+            if sold_delete_btn:
+                selected_sold_rows = [sold_display_df.iloc[idx] for idx in sold_selected_indices]
+                sold_row_nums = [int(row["SheetRowNum"]) for row in selected_sold_rows]
+                
+                st.warning(f"🗑️ Deleting {len(sold_row_nums)} selected sold listing(s)...")
+                
+                # Create updated sold dataframe without selected rows
+                updated_sold_df = sold_df[~sold_df["SheetRowNum"].isin(sold_row_nums)]
+                
+                if save_sold_data(updated_sold_df):
+                    st.success(f"✅ Successfully deleted {len(sold_row_nums)} sold listing(s)!")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to delete sold listings. Please try again.")
+    else:
+        st.info("No sold listings found")
 
     # WhatsApp section - PRESERVE EXISTING LOGIC FOR WHATSAPP MESSAGE GENERATION
     st.markdown("---")
