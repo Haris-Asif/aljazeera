@@ -456,9 +456,9 @@ def show_plots_manager():
     else:
         st.info("No listings available to check for completeness")
     
-    # NEW: Duplicate Listings Section with Checkboxes
+    # UPDATED: Duplicate Listings Section with Checkboxes AND Color Grouping
     st.markdown("---")
-    st.subheader("👥 Duplicate Listings")
+    st.subheader("👥 Duplicate Listings Detection")
     
     if not df_filtered.empty:
         styled_duplicates_df, duplicates_df = create_duplicates_view(df_filtered)
@@ -466,9 +466,16 @@ def show_plots_manager():
         if duplicates_df.empty:
             st.info("No duplicate listings found")
         else:
-            st.info("Showing duplicate listings with matching Sector, Plot No, Street No and Plot Size")
+            st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
             
-            # Display duplicates with checkboxes
+            # FIRST: Display the styled duplicates table with color grouping (read-only)
+            st.markdown("**Color Grouped View (Read-only)**")
+            st.dataframe(styled_duplicates_df, width='stretch', hide_index=True)
+            
+            st.markdown("---")
+            st.markdown("**Actionable View (With Checkboxes)**")
+            
+            # SECOND: Display duplicates with checkboxes for actions
             duplicates_display_df = duplicates_df.copy().reset_index(drop=True)
             duplicates_display_df.insert(0, "Select", False)
             
