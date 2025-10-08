@@ -98,13 +98,68 @@ def show_plots_manager():
                                         index=prop_type_options.index(st.session_state.selected_prop_type), 
                                         key="prop_type_input")
 
-        dealer_names, contact_to_name = build_name_map(df)
+        # NEW: Dynamic dealer names based on current filters
+        # First apply all non-dealer filters to get the current filtered dataset
+        df_temp_filtered = df.copy()
+
+        # Apply sector filter
+        if st.session_state.sector_filter:
+            df_temp_filtered = df_temp_filtered[df_temp_filtered["Sector"].apply(lambda x: sector_matches(st.session_state.sector_filter, str(x)))]
+        
+        # Apply plot size filter
+        if st.session_state.plot_size_filter:
+            df_temp_filtered = df_temp_filtered[df_temp_filtered["Plot Size"].str.contains(st.session_state.plot_size_filter, case=False, na=False)]
+        
+        # Apply street filter
+        if st.session_state.street_filter:
+            street_pattern = re.compile(re.escape(st.session_state.street_filter), re.IGNORECASE)
+            df_temp_filtered = df_temp_filtered[df_temp_filtered["Street No"].apply(lambda x: bool(street_pattern.search(str(x))))]
+        
+        # Apply plot no filter
+        if st.session_state.plot_no_filter:
+            plot_pattern = re.compile(re.escape(st.session_state.plot_no_filter), re.IGNORECASE)
+            df_temp_filtered = df_temp_filtered[df_temp_filtered["Plot No"].apply(lambda x: bool(plot_pattern.search(str(x))))]
+        
+        # Apply contact filter
+        if st.session_state.contact_filter:
+            cnum = clean_number(st.session_state.contact_filter)
+            df_temp_filtered = df_temp_filtered[df_temp_filtered["Extracted Contact"].astype(str).apply(
+                lambda x: any(cnum == clean_number(p) for p in x.split(",")))]
+        
+        # Apply property type filter
+        if "Property Type" in df_temp_filtered.columns and st.session_state.selected_prop_type and st.session_state.selected_prop_type != "All":
+            df_temp_filtered = df_temp_filtered[df_temp_filtered["Property Type"].astype(str).str.strip() == st.session_state.selected_prop_type]
+        
+        # Apply price filter
+        df_temp_filtered["ParsedPrice"] = df_temp_filtered["Demand"].apply(parse_price)
+        if "ParsedPrice" in df_temp_filtered.columns:
+            df_temp_filtered_with_price = df_temp_filtered[df_temp_filtered["ParsedPrice"].notnull()]
+            if not df_temp_filtered_with_price.empty:
+                df_temp_filtered = df_temp_filtered_with_price[(df_temp_filtered_with_price["ParsedPrice"] >= st.session_state.price_from) & (df_temp_filtered_with_price["ParsedPrice"] <= st.session_state.price_to)]
+        
+        # Apply features filter
+        if st.session_state.selected_features:
+            df_temp_filtered = df_temp_filtered[df_temp_filtered["Features"].apply(lambda x: fuzzy_feature_match(x, st.session_state.selected_features))]
+        
+        # Apply date filter
+        df_temp_filtered = filter_by_date(df_temp_filtered, st.session_state.date_filter)
+        
+        # Build dealer names from the CURRENTLY filtered data (not entire dataset)
+        dealer_names, contact_to_name = build_name_map(df_temp_filtered)
         
         if 'selected_dealer' not in st.session_state or st.session_state.filters_reset:
             st.session_state.selected_dealer = ""
-        selected_dealer = st.selectbox("Dealer Name (by contact)", [""] + dealer_names, 
-                                     index=([""] + dealer_names).index(st.session_state.selected_dealer) if st.session_state.selected_dealer in [""] + dealer_names else 0, 
-                                     key="dealer_input")
+        
+        # Show dynamic dealer filter with current count
+        dealer_options = [""] + dealer_names
+        current_index = dealer_options.index(st.session_state.selected_dealer) if st.session_state.selected_dealer in dealer_options else 0
+        
+        selected_dealer = st.selectbox(
+            f"Dealer Name (by contact) - {len(dealer_names)} found", 
+            dealer_options, 
+            index=current_index, 
+            key="dealer_input"
+        )
 
         contact_names = [""] + sorted(contacts_df["Name"].dropna().unique()) if not contacts_df.empty else [""]
         
