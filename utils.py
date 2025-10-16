@@ -1164,3 +1164,127 @@ def save_sold_data(df):
 def generate_sold_id():
     """Generate unique ID for sold listings"""
     return f"S{int(datetime.now().timestamp())}"
+
+# Add these new functions to utils.py
+
+def load_marked_sold_data():
+    """Load marked sold data from Google Sheets"""
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return pd.DataFrame()
+            
+        try:
+            sheet = client.open(SPREADSHEET_NAME).worksheet("MarkedSold")
+        except gspread.exceptions.WorksheetNotFound:
+            spreadsheet = client.open(SPREADSHEET_NAME)
+            sheet = spreadsheet.add_worksheet(title="MarkedSold", rows=100, cols=20)
+            # Add headers if sheet is newly created
+            headers = [
+                "ID", "Timestamp", "Sector", "Plot No", "Street No", "Plot Size", "Demand", 
+                "Features", "Property Type", "Extracted Name", "Extracted Contact", 
+                "Marked Sold Date", "Original Row Num"
+            ]
+            sheet.append_row(headers)
+            return pd.DataFrame(columns=headers)
+            
+        df = pd.DataFrame(sheet.get_all_records())
+        if not df.empty:
+            df["SheetRowNum"] = [i + 2 for i in range(len(df))]
+            
+            # Ensure consistent data types
+            if "Plot No" in df.columns:
+                df["Plot No"] = df["Plot No"].astype(str)
+            if "Street No" in df.columns:
+                df["Street No"] = df["Street No"].astype(str)
+                
+        return df
+    except Exception as e:
+        st.error(f"Error loading marked sold data: {str(e)}")
+        return pd.DataFrame()
+
+def save_marked_sold_data(df):
+    """Save marked sold data to Google Sheets"""
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return False
+            
+        try:
+            sheet = client.open(SPREADSHEET_NAME).worksheet("MarkedSold")
+        except gspread.exceptions.WorksheetNotFound:
+            spreadsheet = client.open(SPREADSHEET_NAME)
+            sheet = spreadsheet.add_worksheet(title="MarkedSold", rows=100, cols=20)
+            headers = [
+                "ID", "Timestamp", "Sector", "Plot No", "Street No", "Plot Size", "Demand", 
+                "Features", "Property Type", "Extracted Name", "Extracted Contact", 
+                "Marked Sold Date", "Original Row Num"
+            ]
+            sheet.append_row(headers)
+        
+        sheet.clear()
+        headers = df.columns.tolist()
+        sheet.append_row(headers)
+        
+        for i in range(0, len(df), BATCH_SIZE):
+            batch = df.iloc[i:i+BATCH_SIZE]
+            rows = []
+            for _, row in batch.iterrows():
+                rows.append(row.tolist())
+            sheet.append_rows(rows)
+            time.sleep(API_DELAY)
+            
+        st.cache_data.clear()  # Clear cache to refresh data
+        return True
+    except Exception as e:
+        st.error(f"Error saving marked sold data: {str(e)}")
+        return False
+
+def create_duplicates_view_updated(df):
+    """Updated duplicate detection with new criteria (FIX 5)"""
+    if df.empty:
+        return None, pd.DataFrame()
+    
+    required_cols = ["Sector", "Plot No", "Street No", "Plot Size", 
+                    "Extracted Contact", "Extracted Name", "Demand"]
+    for col in required_cols:
+        if col not in df.columns:
+            st.warning(f"Cannot check duplicates: Missing column '{col}'")
+            return None, pd.DataFrame()
+    
+    # Create group key based on location details only
+    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
+    
+    # Find groups with same location but different contact/name/demand
+    duplicate_groups = []
+    
+    for group_key in df["GroupKey"].unique():
+        group_df = df[df["GroupKey"] == group_key]
+        if len(group_df) > 1:
+            # Check if there are differences in contact, name, or demand
+            contact_variation = len(group_df["Extracted Contact"].unique()) > 1
+            name_variation = len(group_df["Extracted Name"].unique()) > 1
+            demand_variation = len(group_df["Demand"].unique()) > 1
+            
+            if contact_variation or name_variation or demand_variation:
+                duplicate_groups.append(group_key)
+    
+    duplicate_df = df[df["GroupKey"].isin(duplicate_groups)]
+    
+    if duplicate_df.empty:
+        return None, duplicate_df
+    
+    duplicate_df = duplicate_df.sort_values(by=["GroupKey", "Extracted Contact", "Extracted Name", "Demand"])
+    
+    unique_groups = duplicate_df["GroupKey"].unique()
+    color_map = {}
+    colors = ["#FFCCCC", "#CCFFCC", "#CCCCFF", "#FFFFCC", "#FFCCFF", "#CCFFFF", "#FFE5CC", "#E5CCFF"]
+    
+    for i, group in enumerate(unique_groups):
+        color_map[group] = colors[i % len(colors)]
+    
+    def apply_row_color(row):
+        return [f"background-color: {color_map[row['GroupKey']]}"] * len(row)
+    
+    styled_df = duplicate_df.style.apply(apply_row_color, axis=1)
+    return styled_df, duplicate_df
