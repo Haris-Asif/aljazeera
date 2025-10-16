@@ -32,6 +32,7 @@ ACTIVITIES_SHEET = "LeadActivities"
 TASKS_SHEET = "Tasks"
 APPOINTMENTS_SHEET = "Appointments"
 SOLD_SHEET = "Sold"
+MARKED_SOLD_SHEET = "MarkedSold"
 BATCH_SIZE = 10
 API_DELAY = 1
 
@@ -126,6 +127,31 @@ def safe_dataframe(df):
     except Exception as e:
         st.error(f"⚠️ Error displaying table: {e}")
         return pd.DataFrame()
+
+def safe_dataframe_for_display(df):
+    """Ensure DataFrame has consistent data types for Arrow compatibility in data editor"""
+    try:
+        df = df.copy()
+        
+        # Convert all object columns to string to avoid mixed type issues
+        for col in df.columns:
+            if df[col].dtype == "object":
+                df[col] = df[col].astype(str)
+        
+        # Ensure specific problematic columns are properly handled
+        if "Demand" in df.columns:
+            df["Demand"] = df["Demand"].astype(str)
+        if "Plot No" in df.columns:
+            df["Plot No"] = df["Plot No"].astype(str)
+        if "Street No" in df.columns:
+            df["Street No"] = df["Street No"].astype(str)
+        if "Plot Size" in df.columns:
+            df["Plot Size"] = df["Plot Size"].astype(str)
+        
+        return df
+    except Exception as e:
+        st.error(f"⚠️ Error preparing table for display: {e}")
+        return df
 
 def filter_by_date(df, label):
     if df.empty or label == "All":
@@ -288,6 +314,101 @@ def create_duplicates_view(df):
     styled_df = duplicate_df.style.apply(apply_row_color, axis=1)
     return styled_df, duplicate_df
 
+def create_duplicates_view_updated(df):
+    """Updated duplicate detection with new criteria - matching Sector, Plot No, Street No, Plot Size but different Contact/Name/Demand"""
+    if df.empty:
+        return None, pd.DataFrame()
+    
+    required_cols = ["Sector", "Plot No", "Street No", "Plot Size", 
+                    "Extracted Contact", "Extracted Name", "Demand"]
+    for col in required_cols:
+        if col not in df.columns:
+            st.warning(f"Cannot check duplicates: Missing column '{col}'")
+            return None, pd.DataFrame()
+    
+    # Create group key based on location details only
+    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
+    
+    # Find groups with same location but different contact/name/demand
+    duplicate_groups = []
+    
+    for group_key in df["GroupKey"].unique():
+        group_df = df[df["GroupKey"] == group_key]
+        if len(group_df) > 1:
+            # Check if there are differences in contact, name, or demand
+            contact_variation = len(group_df["Extracted Contact"].unique()) > 1
+            name_variation = len(group_df["Extracted Name"].unique()) > 1
+            demand_variation = len(group_df["Demand"].unique()) > 1
+            
+            if contact_variation or name_variation or demand_variation:
+                duplicate_groups.append(group_key)
+    
+    duplicate_df = df[df["GroupKey"].isin(duplicate_groups)]
+    
+    if duplicate_df.empty:
+        return None, duplicate_df
+    
+    duplicate_df = duplicate_df.sort_values(by=["GroupKey", "Extracted Contact", "Extracted Name", "Demand"])
+    
+    unique_groups = duplicate_df["GroupKey"].unique()
+    color_map = {}
+    colors = ["#FFCCCC", "#CCFFCC", "#CCCCFF", "#FFFFCC", "#FFCCFF", "#CCFFFF", "#FFE5CC", "#E5CCFF"]
+    
+    for i, group in enumerate(unique_groups):
+        color_map[group] = colors[i % len(colors)]
+    
+    def apply_row_color(row):
+        return [f"background-color: {color_map[row['GroupKey']]}"] * len(row)
+    
+    styled_df = duplicate_df.style.apply(apply_row_color, axis=1)
+    return styled_df, duplicate_df
+
+def sort_dataframe(df):
+    """Sort dataframe by Sector, Plot No, Street No, Plot Size in ascending order"""
+    if df.empty:
+        return df
+    
+    # Create a copy to avoid modifying the original
+    sorted_df = df.copy()
+    
+    # Extract numeric values for proper sorting
+    if "Plot No" in sorted_df.columns:
+        sorted_df["Plot_No_Numeric"] = sorted_df["Plot No"].apply(_extract_int)
+    
+    if "Street No" in sorted_df.columns:
+        sorted_df["Street_No_Numeric"] = sorted_df["Street No"].apply(_extract_int)
+    
+    if "Plot Size" in sorted_df.columns:
+        sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(_extract_int)
+    
+    # Sort by the specified columns
+    sort_columns = ["Sector"]
+    
+    # Add numeric columns for sorting if they exist
+    if "Plot_No_Numeric" in sorted_df.columns:
+        sort_columns.append("Plot_No_Numeric")
+    if "Street_No_Numeric" in sorted_df.columns:
+        sort_columns.append("Street_No_Numeric")
+    if "Plot_Size_Numeric" in sorted_df.columns:
+        sort_columns.append("Plot_Size_Numeric")
+    
+    # Add original columns as fallback
+    sort_columns.extend(["Plot No", "Street No", "Plot Size"])
+    
+    # Remove duplicates
+    sort_columns = list(dict.fromkeys(sort_columns))
+    
+    try:
+        sorted_df = sorted_df.sort_values(by=sort_columns, ascending=True)
+    except Exception as e:
+        st.warning(f"Could not sort dataframe: {e}")
+        return df
+    
+    # Drop temporary numeric columns
+    sorted_df = sorted_df.drop(columns=["Plot_No_Numeric", "Street_No_Numeric", "Plot_Size_Numeric"], errors="ignore")
+    
+    return sorted_df
+
 # Google Sheets Functions
 @st.cache_resource(show_spinner=False)
 def get_gsheet_client():
@@ -383,6 +504,43 @@ def load_sold_data():
         return df
     except Exception as e:
         st.error(f"Error loading sold data: {str(e)}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=300, show_spinner="Loading marked sold data...")
+def load_marked_sold_data():
+    """Load marked sold data from Google Sheets"""
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return pd.DataFrame()
+            
+        try:
+            sheet = client.open(SPREADSHEET_NAME).worksheet(MARKED_SOLD_SHEET)
+        except gspread.exceptions.WorksheetNotFound:
+            spreadsheet = client.open(SPREADSHEET_NAME)
+            sheet = spreadsheet.add_worksheet(title=MARKED_SOLD_SHEET, rows=100, cols=20)
+            # Add headers if sheet is newly created
+            headers = [
+                "ID", "Timestamp", "Sector", "Plot No", "Street No", "Plot Size", "Demand", 
+                "Features", "Property Type", "Extracted Name", "Extracted Contact", 
+                "Marked Sold Date", "Original Row Num"
+            ]
+            sheet.append_row(headers)
+            return pd.DataFrame(columns=headers)
+            
+        df = pd.DataFrame(sheet.get_all_records())
+        if not df.empty:
+            df["SheetRowNum"] = [i + 2 for i in range(len(df))]
+            
+            # Ensure consistent data types
+            if "Plot No" in df.columns:
+                df["Plot No"] = df["Plot No"].astype(str)
+            if "Street No" in df.columns:
+                df["Street No"] = df["Street No"].astype(str)
+                
+        return df
+    except Exception as e:
+        st.error(f"Error loading marked sold data: {str(e)}")
         return pd.DataFrame()
 
 @st.cache_data(ttl=300, show_spinner="Loading leads...")
@@ -609,6 +767,7 @@ def save_appointments(df):
         return False
 
 def save_sold_data(df):
+    """Save sold data to Google Sheets"""
     try:
         client = get_gsheet_client()
         if not client:
@@ -639,12 +798,51 @@ def save_sold_data(df):
             sheet.append_rows(rows)
             time.sleep(API_DELAY)
             
+        st.cache_data.clear()  # Clear cache to refresh data
         return True
     except Exception as e:
         st.error(f"Error saving sold data: {str(e)}")
         return False
 
+def save_marked_sold_data(df):
+    """Save marked sold data to Google Sheets"""
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return False
+            
+        try:
+            sheet = client.open(SPREADSHEET_NAME).worksheet(MARKED_SOLD_SHEET)
+        except gspread.exceptions.WorksheetNotFound:
+            spreadsheet = client.open(SPREADSHEET_NAME)
+            sheet = spreadsheet.add_worksheet(title=MARKED_SOLD_SHEET, rows=100, cols=20)
+            headers = [
+                "ID", "Timestamp", "Sector", "Plot No", "Street No", "Plot Size", "Demand", 
+                "Features", "Property Type", "Extracted Name", "Extracted Contact", 
+                "Marked Sold Date", "Original Row Num"
+            ]
+            sheet.append_row(headers)
+        
+        sheet.clear()
+        headers = df.columns.tolist()
+        sheet.append_row(headers)
+        
+        for i in range(0, len(df), BATCH_SIZE):
+            batch = df.iloc[i:i+BATCH_SIZE]
+            rows = []
+            for _, row in batch.iterrows():
+                rows.append(row.tolist())
+            sheet.append_rows(rows)
+            time.sleep(API_DELAY)
+            
+        st.cache_data.clear()  # Clear cache to refresh data
+        return True
+    except Exception as e:
+        st.error(f"Error saving marked sold data: {str(e)}")
+        return False
+
 def update_plot_data(updated_row):
+    """Update a specific plot row in Google Sheets"""
     try:
         client = get_gsheet_client()
         if not client:
@@ -665,6 +863,7 @@ def update_plot_data(updated_row):
                 row_values.append(updated_row.get(header, ""))
             
             sheet.update(f"A{row_num}:{chr(64 + len(headers))}{row_num}", [row_values])
+            st.cache_data.clear()  # Clear cache to refresh data
             return True
         else:
             st.error("Invalid row number for update")
@@ -1164,127 +1363,3 @@ def save_sold_data(df):
 def generate_sold_id():
     """Generate unique ID for sold listings"""
     return f"S{int(datetime.now().timestamp())}"
-
-# Add these new functions to utils.py
-
-def load_marked_sold_data():
-    """Load marked sold data from Google Sheets"""
-    try:
-        client = get_gsheet_client()
-        if not client:
-            return pd.DataFrame()
-            
-        try:
-            sheet = client.open(SPREADSHEET_NAME).worksheet("MarkedSold")
-        except gspread.exceptions.WorksheetNotFound:
-            spreadsheet = client.open(SPREADSHEET_NAME)
-            sheet = spreadsheet.add_worksheet(title="MarkedSold", rows=100, cols=20)
-            # Add headers if sheet is newly created
-            headers = [
-                "ID", "Timestamp", "Sector", "Plot No", "Street No", "Plot Size", "Demand", 
-                "Features", "Property Type", "Extracted Name", "Extracted Contact", 
-                "Marked Sold Date", "Original Row Num"
-            ]
-            sheet.append_row(headers)
-            return pd.DataFrame(columns=headers)
-            
-        df = pd.DataFrame(sheet.get_all_records())
-        if not df.empty:
-            df["SheetRowNum"] = [i + 2 for i in range(len(df))]
-            
-            # Ensure consistent data types
-            if "Plot No" in df.columns:
-                df["Plot No"] = df["Plot No"].astype(str)
-            if "Street No" in df.columns:
-                df["Street No"] = df["Street No"].astype(str)
-                
-        return df
-    except Exception as e:
-        st.error(f"Error loading marked sold data: {str(e)}")
-        return pd.DataFrame()
-
-def save_marked_sold_data(df):
-    """Save marked sold data to Google Sheets"""
-    try:
-        client = get_gsheet_client()
-        if not client:
-            return False
-            
-        try:
-            sheet = client.open(SPREADSHEET_NAME).worksheet("MarkedSold")
-        except gspread.exceptions.WorksheetNotFound:
-            spreadsheet = client.open(SPREADSHEET_NAME)
-            sheet = spreadsheet.add_worksheet(title="MarkedSold", rows=100, cols=20)
-            headers = [
-                "ID", "Timestamp", "Sector", "Plot No", "Street No", "Plot Size", "Demand", 
-                "Features", "Property Type", "Extracted Name", "Extracted Contact", 
-                "Marked Sold Date", "Original Row Num"
-            ]
-            sheet.append_row(headers)
-        
-        sheet.clear()
-        headers = df.columns.tolist()
-        sheet.append_row(headers)
-        
-        for i in range(0, len(df), BATCH_SIZE):
-            batch = df.iloc[i:i+BATCH_SIZE]
-            rows = []
-            for _, row in batch.iterrows():
-                rows.append(row.tolist())
-            sheet.append_rows(rows)
-            time.sleep(API_DELAY)
-            
-        st.cache_data.clear()  # Clear cache to refresh data
-        return True
-    except Exception as e:
-        st.error(f"Error saving marked sold data: {str(e)}")
-        return False
-
-def create_duplicates_view_updated(df):
-    """Updated duplicate detection with new criteria (FIX 5)"""
-    if df.empty:
-        return None, pd.DataFrame()
-    
-    required_cols = ["Sector", "Plot No", "Street No", "Plot Size", 
-                    "Extracted Contact", "Extracted Name", "Demand"]
-    for col in required_cols:
-        if col not in df.columns:
-            st.warning(f"Cannot check duplicates: Missing column '{col}'")
-            return None, pd.DataFrame()
-    
-    # Create group key based on location details only
-    df["GroupKey"] = df["Sector"].astype(str) + "|" + df["Plot No"].astype(str) + "|" + df["Street No"].astype(str) + "|" + df["Plot Size"].astype(str)
-    
-    # Find groups with same location but different contact/name/demand
-    duplicate_groups = []
-    
-    for group_key in df["GroupKey"].unique():
-        group_df = df[df["GroupKey"] == group_key]
-        if len(group_df) > 1:
-            # Check if there are differences in contact, name, or demand
-            contact_variation = len(group_df["Extracted Contact"].unique()) > 1
-            name_variation = len(group_df["Extracted Name"].unique()) > 1
-            demand_variation = len(group_df["Demand"].unique()) > 1
-            
-            if contact_variation or name_variation or demand_variation:
-                duplicate_groups.append(group_key)
-    
-    duplicate_df = df[df["GroupKey"].isin(duplicate_groups)]
-    
-    if duplicate_df.empty:
-        return None, duplicate_df
-    
-    duplicate_df = duplicate_df.sort_values(by=["GroupKey", "Extracted Contact", "Extracted Name", "Demand"])
-    
-    unique_groups = duplicate_df["GroupKey"].unique()
-    color_map = {}
-    colors = ["#FFCCCC", "#CCFFCC", "#CCCCFF", "#FFFFCC", "#FFCCFF", "#CCFFFF", "#FFE5CC", "#E5CCFF"]
-    
-    for i, group in enumerate(unique_groups):
-        color_map[group] = colors[i % len(colors)]
-    
-    def apply_row_color(row):
-        return [f"background-color: {color_map[row['GroupKey']]}"] * len(row)
-    
-    styled_df = duplicate_df.style.apply(apply_row_color, axis=1)
-    return styled_df, duplicate_df
