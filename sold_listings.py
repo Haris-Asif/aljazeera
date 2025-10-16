@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
-from utils import load_sold_data, load_marked_sold_data
+from utils import load_sold_data, load_marked_sold_data, sort_dataframe
 
 def show_sold_listings():
     st.header("✅ Closed Deals & Sold Listings")
@@ -13,6 +13,9 @@ def show_sold_listings():
     
     # Combine both datasets for display
     combined_df = pd.concat([sold_df, marked_sold_df], ignore_index=True)
+    
+    # Sort the combined data
+    combined_df = sort_dataframe(combined_df)
     
     # Display metrics
     col1, col2, col3, col4 = st.columns(4)
