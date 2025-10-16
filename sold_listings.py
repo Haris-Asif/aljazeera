@@ -2,25 +2,29 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
-from utils import load_sold_data
+from utils import load_sold_data, load_marked_sold_data
 
 def show_sold_listings():
     st.header("✅ Closed Deals & Sold Listings")
     
-    # Load sold data
+    # Load both sold data and marked sold data
     sold_df = load_sold_data()
+    marked_sold_df = load_marked_sold_data()
+    
+    # Combine both datasets for display
+    combined_df = pd.concat([sold_df, marked_sold_df], ignore_index=True)
     
     # Display metrics
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        total_sold = len(sold_df)
+        total_sold = len(combined_df)
         st.metric("🏆 Total Sold", total_sold)
     
     with col2:
-        if not sold_df.empty and "Sale Price" in sold_df.columns:
+        if not combined_df.empty and "Sale Price" in combined_df.columns:
             try:
-                total_revenue = sold_df["Sale Price"].apply(lambda x: float(x) if str(x).replace('.', '').isdigit() else 0).sum()
+                total_revenue = combined_df["Sale Price"].apply(lambda x: float(x) if str(x).replace('.', '').isdigit() else 0).sum()
                 st.metric("💰 Total Revenue", f"₹{total_revenue:,.0f}")
             except:
                 st.metric("💰 Total Revenue", "₹0")
@@ -28,10 +32,10 @@ def show_sold_listings():
             st.metric("💰 Total Revenue", "₹0")
     
     with col3:
-        if not sold_df.empty and "Sale Date" in sold_df.columns:
+        if not combined_df.empty and "Sale Date" in combined_df.columns:
             try:
                 current_month = datetime.now().strftime("%Y-%m")
-                monthly_sales = len([date for date in sold_df["Sale Date"] if str(date).startswith(current_month)])
+                monthly_sales = len([date for date in combined_df["Sale Date"] if str(date).startswith(current_month)])
                 st.metric("📈 This Month", monthly_sales)
             except:
                 st.metric("📈 This Month", 0)
@@ -39,8 +43,8 @@ def show_sold_listings():
             st.metric("📈 This Month", 0)
     
     with col4:
-        if not sold_df.empty and "Agent" in sold_df.columns:
-            top_agent = sold_df["Agent"].value_counts().index[0] if not sold_df["Agent"].value_counts().empty else "N/A"
+        if not combined_df.empty and "Agent" in combined_df.columns:
+            top_agent = combined_df["Agent"].value_counts().index[0] if not combined_df["Agent"].value_counts().empty else "N/A"
             st.metric("👑 Top Agent", top_agent)
         else:
             st.metric("👑 Top Agent", "N/A")
@@ -63,7 +67,7 @@ def show_sold_listings():
         max_price = st.number_input("Max Price", min_value=0, value=10000000, step=100000)
     
     # Apply filters
-    filtered_sold = sold_df.copy()
+    filtered_sold = combined_df.copy()
     
     if sector_filter:
         filtered_sold = filtered_sold[filtered_sold["Sector"].str.contains(sector_filter, case=False, na=False)]
@@ -180,5 +184,3 @@ def show_sold_listings():
             file_name=f"sold_listings_{datetime.now().strftime('%Y%m%d')}.csv",
             mime="text/csv"
         )
-
-# This module can be imported in main.py
