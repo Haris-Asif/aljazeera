@@ -363,6 +363,9 @@ def show_plots_manager():
 
     df_filtered = filter_by_date(df_filtered, st.session_state.date_filter)
 
+    # FIX 2: Sort the dataframe by Sector, Plot No, Street No, Plot Size in ascending order
+    df_filtered = sort_dataframe(df_filtered)
+
     # Move Timestamp column to the end
     if "Timestamp" in df_filtered.columns:
         cols = [col for col in df_filtered.columns if col != "Timestamp"] + ["Timestamp"]
@@ -394,10 +397,8 @@ def show_plots_manager():
         display_df = df_filtered.copy().reset_index(drop=True)
         display_df.insert(0, "Select", False)
         
-        # Ensure all data types are consistent for display
-        for col in display_df.columns:
-            if display_df[col].dtype == "object":
-                display_df[col] = display_df[col].astype(str)
+        # Ensure all data types are consistent for display (FIX 1)
+        display_df = safe_dataframe_for_display(display_df)
         
         # Action buttons row
         col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
@@ -416,7 +417,7 @@ def show_plots_manager():
             "SheetRowNum": st.column_config.NumberColumn(disabled=True)
         }
         
-        # Display editable dataframe with checkboxes
+        # FIX 1: Use width='stretch' instead of use_container_width
         edited_df = st.data_editor(
             display_df,
             column_config=column_config,
@@ -426,14 +427,15 @@ def show_plots_manager():
             key="plots_data_editor"
         )
         
+        # Handle select all functionality (FIX 1)
+        if select_all:
+            edited_df["Select"] = True
+        
         # Get selected rows from the edited dataframe
         selected_indices = edited_df[edited_df["Select"]].index.tolist()
         
         # Update session state with selected indices
-        if select_all:
-            st.session_state.selected_rows = list(range(len(display_df)))
-        else:
-            st.session_state.selected_rows = selected_indices
+        st.session_state.selected_rows = selected_indices
         
         # Display selection info
         if st.session_state.selected_rows:
@@ -448,11 +450,10 @@ def show_plots_manager():
                 else:
                     st.warning("Please select only one row to edit.")
             
-            # Handle Mark as Sold action
+            # Handle Mark as Sold action (FIX 4)
             if mark_sold_btn:
-                st.session_state.mark_sold_mode = True
-                st.session_state.mark_sold_rows = [display_df.iloc[idx].to_dict() for idx in st.session_state.selected_rows]
-                st.rerun()
+                selected_display_rows = [display_df.iloc[idx] for idx in st.session_state.selected_rows]
+                mark_listings_sold(selected_display_rows)
             
             # FIXED: SIMPLE DELETE BUTTON - DIRECT ACTION
             if delete_btn:
@@ -478,10 +479,6 @@ def show_plots_manager():
         # Edit Form
         if st.session_state.get('edit_mode') and st.session_state.editing_row:
             show_edit_form(st.session_state.editing_row)
-        
-        # Mark as Sold Form
-        if st.session_state.get('mark_sold_mode') and st.session_state.mark_sold_rows:
-            show_mark_sold_form(st.session_state.mark_sold_rows)
             
     else:
         st.info("No listings match your filters")
@@ -522,12 +519,18 @@ def show_plots_manager():
         
         incomplete_df = pd.DataFrame(incomplete_listings)
         
+        # FIX 2: Sort incomplete listings
+        incomplete_df = sort_dataframe(incomplete_df)
+        
         if not incomplete_df.empty:
             st.info(f"Found {len(incomplete_df)} listings with missing information")
             
             # Display incomplete listings with checkboxes
             incomplete_display_df = incomplete_df.copy().reset_index(drop=True)
             incomplete_display_df.insert(0, "Select", False)
+            
+            # Ensure data types are consistent (FIX 1)
+            incomplete_display_df = safe_dataframe_for_display(incomplete_display_df)
             
             # Action buttons for incomplete listings
             col1, col2, col3 = st.columns([2, 1, 1])
@@ -545,21 +548,22 @@ def show_plots_manager():
                 "Missing Fields": st.column_config.TextColumn(disabled=True)
             }
             
-            # Display incomplete listings
+            # FIX 1: Use width='stretch'
             incomplete_edited_df = st.data_editor(
                 incomplete_display_df,
                 column_config=incomplete_column_config,
                 hide_index=True,
-                use_container_width=True,
+                width='stretch',
                 disabled=incomplete_display_df.columns.difference(["Select"]).tolist(),
                 key="incomplete_data_editor"
             )
             
+            # Handle select all for incomplete listings (FIX 1)
+            if incomplete_select_all:
+                incomplete_edited_df["Select"] = True
+            
             # Get selected incomplete rows
             incomplete_selected_indices = incomplete_edited_df[incomplete_edited_df["Select"]].index.tolist()
-            
-            if incomplete_select_all:
-                incomplete_selected_indices = list(range(len(incomplete_display_df)))
             
             # Handle incomplete listing actions
             if incomplete_selected_indices:
@@ -597,23 +601,31 @@ def show_plots_manager():
     st.subheader("👥 Duplicate Listings Detection")
     
     if not df_filtered.empty:
-        styled_duplicates_df, duplicates_df = create_duplicates_view(df_filtered)
+        # FIX 5: Updated duplicate detection with new criteria
+        styled_duplicates_df, duplicates_df = create_duplicates_view_updated(df_filtered)
         
         if duplicates_df.empty:
             st.info("No duplicate listings found")
         else:
-            st.info("Showing only duplicate listings with matching Sector, Plot No, Street No and Plot Size")
+            st.info("Showing duplicate listings with matching Sector, Plot No, Street No, Plot Size but different Contact/Name/Demand")
             
             # FIRST: Display the styled duplicates table with color grouping (read-only)
             st.markdown("**Color Grouped View (Read-only)**")
+            # FIX 1: Use width='stretch'
             st.dataframe(styled_duplicates_df, width='stretch', hide_index=True)
             
             st.markdown("---")
             st.markdown("**Actionable View (With Checkboxes)**")
             
+            # FIX 2: Sort duplicates
+            duplicates_df = sort_dataframe(duplicates_df)
+            
             # SECOND: Display duplicates with checkboxes for actions
             duplicates_display_df = duplicates_df.copy().reset_index(drop=True)
             duplicates_display_df.insert(0, "Select", False)
+            
+            # Ensure data types are consistent (FIX 1)
+            duplicates_display_df = safe_dataframe_for_display(duplicates_display_df)
             
             # Action buttons for duplicates
             col1, col2, col3 = st.columns([2, 1, 1])
@@ -631,21 +643,22 @@ def show_plots_manager():
                 "GroupKey": st.column_config.TextColumn(disabled=True)
             }
             
-            # Display duplicates with checkboxes
+            # FIX 1: Use width='stretch'
             duplicates_edited_df = st.data_editor(
                 duplicates_display_df,
                 column_config=duplicates_column_config,
                 hide_index=True,
-                use_container_width=True,
+                width='stretch',
                 disabled=duplicates_display_df.columns.difference(["Select"]).tolist(),
                 key="duplicates_data_editor"
             )
             
+            # Handle select all for duplicates (FIX 1)
+            if duplicates_select_all:
+                duplicates_edited_df["Select"] = True
+            
             # Get selected duplicate rows
             duplicates_selected_indices = duplicates_edited_df[duplicates_edited_df["Select"]].index.tolist()
-            
-            if duplicates_select_all:
-                duplicates_selected_indices = list(range(len(duplicates_display_df)))
             
             # Handle duplicate listing actions
             if duplicates_selected_indices:
@@ -675,68 +688,6 @@ def show_plots_manager():
                         st.error("❌ Failed to delete duplicate listings. Please try again.")
     else:
         st.info("No listings to analyze for duplicates")
-
-    # NEW: Sold Listings Section
-    st.markdown("---")
-    st.subheader("✅ Sold Listings")
-    
-    if not sold_df.empty:
-        st.info(f"Showing {len(sold_df)} sold listings")
-        
-        # Display sold listings
-        sold_display_df = sold_df.copy().reset_index(drop=True)
-        sold_display_df.insert(0, "Select", False)
-        
-        # Action buttons for sold listings
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            sold_select_all = st.checkbox("Select All Sold", key="select_all_sold")
-        with col2:
-            sold_delete_btn = st.button("🗑️ Delete Selected", type="primary", use_container_width=True, key="delete_sold_btn")
-        
-        # Configure columns for sold data editor
-        sold_column_config = {
-            "Select": st.column_config.CheckboxColumn(required=True),
-            "SheetRowNum": st.column_config.NumberColumn(disabled=True)
-        }
-        
-        # Display sold listings with checkboxes
-        sold_edited_df = st.data_editor(
-            sold_display_df,
-            column_config=sold_column_config,
-            hide_index=True,
-            use_container_width=True,
-            disabled=sold_display_df.columns.difference(["Select"]).tolist(),
-            key="sold_data_editor"
-        )
-        
-        # Get selected sold rows
-        sold_selected_indices = sold_edited_df[sold_edited_df["Select"]].index.tolist()
-        
-        if sold_select_all:
-            sold_selected_indices = list(range(len(sold_display_df)))
-        
-        # Handle sold listing actions
-        if sold_selected_indices:
-            st.success(f"**{len(sold_selected_indices)} sold listing(s) selected**")
-            
-            if sold_delete_btn:
-                selected_sold_rows = [sold_display_df.iloc[idx] for idx in sold_selected_indices]
-                sold_row_nums = [int(row["SheetRowNum"]) for row in selected_sold_rows]
-                
-                st.warning(f"🗑️ Deleting {len(sold_row_nums)} selected sold listing(s)...")
-                
-                # Create updated sold dataframe without selected rows
-                updated_sold_df = sold_df[~sold_df["SheetRowNum"].isin(sold_row_nums)]
-                
-                if save_sold_data(updated_sold_df):
-                    st.success(f"✅ Successfully deleted {len(sold_row_nums)} sold listing(s)!")
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.error("❌ Failed to delete sold listings. Please try again.")
-    else:
-        st.info("No sold listings found")
 
     # WhatsApp section - PRESERVE EXISTING LOGIC FOR WHATSAPP MESSAGE GENERATION
     st.markdown("---")
@@ -791,6 +742,128 @@ def show_plots_manager():
                           unsafe_allow_html=True)
                 st.markdown("---")
 
+def sort_dataframe(df):
+    """Sort dataframe by Sector, Plot No, Street No, Plot Size in ascending order"""
+    if df.empty:
+        return df
+    
+    # Create a copy to avoid modifying the original
+    sorted_df = df.copy()
+    
+    # Extract numeric values for proper sorting
+    if "Plot No" in sorted_df.columns:
+        sorted_df["Plot_No_Numeric"] = sorted_df["Plot No"].apply(_extract_int)
+    
+    if "Street No" in sorted_df.columns:
+        sorted_df["Street_No_Numeric"] = sorted_df["Street No"].apply(_extract_int)
+    
+    if "Plot Size" in sorted_df.columns:
+        sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(_extract_int)
+    
+    # Sort by the specified columns
+    sort_columns = ["Sector"]
+    
+    # Add numeric columns for sorting if they exist
+    if "Plot_No_Numeric" in sorted_df.columns:
+        sort_columns.append("Plot_No_Numeric")
+    if "Street_No_Numeric" in sorted_df.columns:
+        sort_columns.append("Street_No_Numeric")
+    if "Plot_Size_Numeric" in sorted_df.columns:
+        sort_columns.append("Plot_Size_Numeric")
+    
+    # Add original columns as fallback
+    sort_columns.extend(["Plot No", "Street No", "Plot Size"])
+    
+    # Remove duplicates
+    sort_columns = list(dict.fromkeys(sort_columns))
+    
+    try:
+        sorted_df = sorted_df.sort_values(by=sort_columns, ascending=True)
+    except Exception as e:
+        st.warning(f"Could not sort dataframe: {e}")
+        return df
+    
+    # Drop temporary numeric columns
+    sorted_df = sorted_df.drop(columns=["Plot_No_Numeric", "Street_No_Numeric", "Plot_Size_Numeric"], errors="ignore")
+    
+    return sorted_df
+
+def safe_dataframe_for_display(df):
+    """Ensure DataFrame has consistent data types for Arrow compatibility (FIX 1)"""
+    try:
+        df = df.copy()
+        
+        # Convert all object columns to string to avoid mixed type issues
+        for col in df.columns:
+            if df[col].dtype == "object":
+                df[col] = df[col].astype(str)
+        
+        # Ensure specific problematic columns are properly handled
+        if "Demand" in df.columns:
+            df["Demand"] = df["Demand"].astype(str)
+        if "Plot No" in df.columns:
+            df["Plot No"] = df["Plot No"].astype(str)
+        if "Street No" in df.columns:
+            df["Street No"] = df["Street No"].astype(str)
+        if "Plot Size" in df.columns:
+            df["Plot Size"] = df["Plot Size"].astype(str)
+        
+        return df
+    except Exception as e:
+        st.error(f"⚠️ Error preparing table for display: {e}")
+        return df
+
+def mark_listings_sold(rows_data):
+    """Mark selected listings as sold by moving them to MarkedSold sheet (FIX 4)"""
+    try:
+        # Load existing marked sold data
+        marked_sold_df = load_marked_sold_data()
+        
+        # Add each selected row to marked sold data
+        for row_data in rows_data:
+            sold_id = generate_sold_id()
+            new_sold_record = {
+                "ID": sold_id,
+                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Sector": row_data.get("Sector", ""),
+                "Plot No": row_data.get("Plot No", ""),
+                "Street No": row_data.get("Street No", ""),
+                "Plot Size": row_data.get("Plot Size", ""),
+                "Demand": row_data.get("Demand", ""),
+                "Features": row_data.get("Features", ""),
+                "Property Type": row_data.get("Property Type", ""),
+                "Extracted Name": row_data.get("Extracted Name", ""),
+                "Extracted Contact": row_data.get("Extracted Contact", ""),
+                "Marked Sold Date": datetime.now().strftime("%Y-%m-%d"),
+                "Original Row Num": row_data.get("SheetRowNum", "")
+            }
+            
+            marked_sold_df = pd.concat([marked_sold_df, pd.DataFrame([new_sold_record])], ignore_index=True)
+        
+        # Save marked sold data
+        if save_marked_sold_data(marked_sold_df):
+            # Delete from plots sheet
+            row_nums = [row["SheetRowNum"] for row in rows_data]
+            if delete_rows_from_sheet(row_nums):
+                st.success(f"✅ Successfully marked {len(rows_data)} listing(s) as sold!")
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error("❌ Failed to remove listings from plots sheet.")
+        else:
+            st.error("❌ Failed to save marked sold data. Please try again.")
+            
+    except Exception as e:
+        st.error(f"❌ Error marking listings as sold: {str(e)}")
+
+def _extract_int(val):
+    """Extract first integer from a string; used for numeric sorting"""
+    try:
+        m = re.search(r"\d+", str(val))
+        return int(m.group()) if m else float("inf")
+    except:
+        return float("inf")
+
 def show_edit_form(row_data):
     """Show form to edit a listing"""
     st.markdown("---")
@@ -841,82 +914,4 @@ def show_edit_form(row_data):
         if cancel:
             st.session_state.edit_mode = False
             st.session_state.editing_row = None
-            st.rerun()
-
-def show_mark_sold_form(rows_data):
-    """Show form to mark listings as sold"""
-    st.markdown("---")
-    st.subheader("✅ Mark as Sold")
-    
-    st.info(f"Marking {len(rows_data)} listing(s) as sold")
-    
-    with st.form("mark_sold_form"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            buyer_name = st.text_input("Buyer Name*", placeholder="Enter buyer's full name")
-            buyer_contact = st.text_input("Buyer Contact", placeholder="Phone number")
-            sale_date = st.date_input("Sale Date", value=datetime.now().date())
-            agent = st.text_input("Agent", value="Current User", placeholder="Agent name")
-        
-        with col2:
-            sale_price = st.number_input("Sale Price (₹)", min_value=0, value=0, step=1000)
-            commission = st.number_input("Commission (₹)", min_value=0, value=0, step=1000)
-            notes = st.text_area("Notes", placeholder="Any additional notes about the sale")
-        
-        submitted = st.form_submit_button("✅ Confirm Sale")
-        cancel = st.form_submit_button("❌ Cancel")
-        
-        if submitted:
-            if not buyer_name:
-                st.error("❌ Buyer Name is required!")
-            else:
-                # Load existing sold data
-                sold_df = load_sold_data()
-                
-                # Add each selected row to sold data
-                for row_data in rows_data:
-                    sold_id = generate_sold_id()
-                    new_sold_record = {
-                        "ID": sold_id,
-                        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "Sector": row_data.get("Sector", ""),
-                        "Plot No": row_data.get("Plot No", ""),
-                        "Street No": row_data.get("Street No", ""),
-                        "Plot Size": row_data.get("Plot Size", ""),
-                        "Demand": row_data.get("Demand", ""),
-                        "Features": row_data.get("Features", ""),
-                        "Property Type": row_data.get("Property Type", ""),
-                        "Extracted Name": row_data.get("Extracted Name", ""),
-                        "Extracted Contact": row_data.get("Extracted Contact", ""),
-                        "Buyer Name": buyer_name,
-                        "Buyer Contact": buyer_contact,
-                        "Sale Date": sale_date.strftime("%Y-%m-%d"),
-                        "Sale Price": sale_price,
-                        "Commission": commission,
-                        "Agent": agent,
-                        "Notes": notes,
-                        "Original Row Num": row_data.get("SheetRowNum", "")
-                    }
-                    
-                    sold_df = pd.concat([sold_df, pd.DataFrame([new_sold_record])], ignore_index=True)
-                
-                # Save sold data
-                if save_sold_data(sold_df):
-                    # Delete from plots sheet
-                    row_nums = [row["SheetRowNum"] for row in rows_data]
-                    if delete_rows_from_sheet(row_nums):
-                        st.success(f"✅ Successfully marked {len(rows_data)} listing(s) as sold!")
-                        st.session_state.mark_sold_mode = False
-                        st.session_state.mark_sold_rows = None
-                        st.cache_data.clear()
-                        st.rerun()
-                    else:
-                        st.error("❌ Failed to remove listings from plots sheet.")
-                else:
-                    st.error("❌ Failed to save sold data. Please try again.")
-        
-        if cancel:
-            st.session_state.mark_sold_mode = False
-            st.session_state.mark_sold_rows = None
             st.rerun()
