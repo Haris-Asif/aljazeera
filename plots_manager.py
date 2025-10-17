@@ -6,8 +6,7 @@ from utils import (load_plot_data, load_contacts, delete_rows_from_sheet,
                   extract_numbers, clean_number, format_phone_link, 
                   get_all_unique_features, filter_by_date, create_duplicates_view_updated,
                   parse_price, update_plot_data, load_sold_data, save_sold_data,
-                  generate_sold_id, load_marked_sold_data, save_marked_sold_data,
-                  sort_dataframe, safe_dataframe_for_display, _extract_int)
+                  generate_sold_id, sort_dataframe, safe_dataframe_for_display, _extract_int)
 from utils import fuzzy_feature_match
 from datetime import datetime
 
@@ -362,7 +361,8 @@ def show_plots_manager():
     df_filtered = filter_by_date(df_filtered, st.session_state.date_filter)
 
     # Sort the dataframe by Sector, Plot No, Street No, Plot Size in ascending order
-    df_filtered = sort_dataframe(df_filtered)
+    # I-15 sectors are sorted by Street No, others by Plot No
+    df_filtered = sort_dataframe_with_i15_street_no(df_filtered)
 
     # Move Timestamp column to the end
     if "Timestamp" in df_filtered.columns:
@@ -449,7 +449,7 @@ def show_plots_manager():
                 else:
                     st.warning("Please select only one row to edit.")
             
-            # Handle Mark as Sold action
+            # Handle Mark as Sold action - FIXED: Now properly removes from Plots and adds to Sold
             if mark_sold_btn:
                 selected_display_rows = [display_df.iloc[idx] for idx in st.session_state.selected_rows]
                 mark_listings_sold(selected_display_rows)
@@ -481,6 +481,48 @@ def show_plots_manager():
             
     else:
         st.info("No listings match your filters")
+    
+    # NEW: Sold Listings Table in Plots Section
+    st.markdown("---")
+    st.subheader("✅ Sold Listings (Filtered)")
+    
+    # Apply the same filters to sold listings
+    sold_df_filtered = sold_df.copy()
+    
+    # Apply the same filters to sold data
+    if st.session_state.sector_filter:
+        sold_df_filtered = sold_df_filtered[sold_df_filtered["Sector"].str.contains(st.session_state.sector_filter, case=False, na=False)]
+    
+    if st.session_state.plot_size_filter:
+        sold_df_filtered = sold_df_filtered[sold_df_filtered["Plot Size"].str.contains(st.session_state.plot_size_filter, case=False, na=False)]
+    
+    if st.session_state.street_filter:
+        sold_df_filtered = sold_df_filtered[sold_df_filtered["Street No"].str.contains(st.session_state.street_filter, case=False, na=False)]
+    
+    if st.session_state.plot_no_filter:
+        sold_df_filtered = sold_df_filtered[sold_df_filtered["Plot No"].str.contains(st.session_state.plot_no_filter, case=False, na=False)]
+    
+    # Apply Property Type filter if selected
+    if "Property Type" in sold_df_filtered.columns and st.session_state.selected_prop_type and st.session_state.selected_prop_type != "All":
+        sold_df_filtered = sold_df_filtered[sold_df_filtered["Property Type"].astype(str).str.strip() == st.session_state.selected_prop_type]
+    
+    # Sort sold listings
+    sold_df_filtered = sort_dataframe_with_i15_street_no(sold_df_filtered)
+    
+    if not sold_df_filtered.empty:
+        st.info(f"Showing {len(sold_df_filtered)} sold listings matching your filters")
+        
+        # Display sold listings
+        display_columns = ["Sector", "Plot No", "Street No", "Plot Size", "Sale Price", "Buyer Name", "Agent", "Sale Date"]
+        available_columns = [col for col in display_columns if col in sold_df_filtered.columns]
+        
+        st.dataframe(
+            sold_df_filtered[available_columns],
+            use_container_width=True,
+            height=300
+        )
+    else:
+        st.info("No sold listings match your filters")
     
     # NEW: Incomplete Listings Section
     st.markdown("---")
@@ -522,7 +564,7 @@ def show_plots_manager():
         incomplete_df = pd.DataFrame(incomplete_listings)
         
         # Sort incomplete listings
-        incomplete_df = sort_dataframe(incomplete_df)
+        incomplete_df = sort_dataframe_with_i15_street_no(incomplete_df)
         
         if not incomplete_df.empty:
             st.info(f"Found {len(incomplete_df)} listings with missing information")
@@ -619,7 +661,7 @@ def show_plots_manager():
             st.markdown("**Actionable View (With Checkboxes)**")
             
             # Sort duplicates
-            duplicates_df = sort_dataframe(duplicates_df)
+            duplicates_df = sort_dataframe_with_i15_street_no(duplicates_df)
             
             # SECOND: Display duplicates with checkboxes for actions
             duplicates_display_df = duplicates_df.copy().reset_index(drop=True)
@@ -743,13 +785,59 @@ def show_plots_manager():
                           unsafe_allow_html=True)
                 st.markdown("---")
 
-def mark_listings_sold(rows_data):
-    """Mark selected listings as sold by moving them to MarkedSold sheet"""
+def sort_dataframe_with_i15_street_no(df):
+    """Sort dataframe with special handling for I-15 sectors - sort by Street No"""
+    if df.empty:
+        return df
+    
+    # Create a copy to avoid modifying the original
+    sorted_df = df.copy()
+    
+    # Extract numeric values for proper sorting
+    if "Plot No" in sorted_df.columns:
+        sorted_df["Plot_No_Numeric"] = sorted_df["Plot No"].apply(_extract_int)
+    
+    if "Street No" in sorted_df.columns:
+        sorted_df["Street_No_Numeric"] = sorted_df["Street No"].apply(_extract_int)
+    
+    if "Plot Size" in sorted_df.columns:
+        sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(_extract_int)
+    
+    # For I-15 sectors, sort by Street No, for others by Plot No
+    def get_sort_key(row):
+        sector = str(row.get("Sector", "")).strip()
+        if sector.startswith("I-15"):
+            # For I-15 sectors, use Street No for primary sorting
+            street_no = _extract_int(row.get("Street No", ""))
+            plot_no = _extract_int(row.get("Plot No", ""))
+            return (sector, street_no, plot_no)
+        else:
+            # For other sectors, use Plot No for primary sorting
+            plot_no = _extract_int(row.get("Plot No", ""))
+            street_no = _extract_int(row.get("Street No", ""))
+            return (sector, plot_no, street_no)
+    
+    # Create a temporary sort key column
+    sorted_df["Sort_Key"] = sorted_df.apply(get_sort_key, axis=1)
+    
     try:
-        # Load existing marked sold data
-        marked_sold_df = load_marked_sold_data()
+        sorted_df = sorted_df.sort_values(by="Sort_Key", ascending=True)
+    except Exception as e:
+        st.warning(f"Could not sort dataframe: {e}")
+        return df
+    
+    # Drop temporary columns
+    sorted_df = sorted_df.drop(columns=["Plot_No_Numeric", "Street_No_Numeric", "Plot_Size_Numeric", "Sort_Key"], errors="ignore")
+    
+    return sorted_df
+
+def mark_listings_sold(rows_data):
+    """Mark selected listings as sold by moving them to Sold sheet and removing from Plots"""
+    try:
+        # Load existing sold data
+        sold_df = load_sold_data()
         
-        # Add each selected row to marked sold data
+        # Add each selected row to sold data
         for row_data in rows_data:
             sold_id = generate_sold_id()
             new_sold_record = {
@@ -764,24 +852,28 @@ def mark_listings_sold(rows_data):
                 "Property Type": row_data.get("Property Type", ""),
                 "Extracted Name": row_data.get("Extracted Name", ""),
                 "Extracted Contact": row_data.get("Extracted Contact", ""),
-                "Marked Sold Date": datetime.now().strftime("%Y-%m-%d"),
+                "Sale Date": datetime.now().strftime("%Y-%m-%d"),
+                "Sale Price": row_data.get("Demand", ""),  # Use Demand as Sale Price
+                "Commission": "",
+                "Agent": "Auto-marked",  # You can change this to current user
+                "Notes": "Marked as sold from Plots section",
                 "Original Row Num": row_data.get("SheetRowNum", "")
             }
             
-            marked_sold_df = pd.concat([marked_sold_df, pd.DataFrame([new_sold_record])], ignore_index=True)
+            sold_df = pd.concat([sold_df, pd.DataFrame([new_sold_record])], ignore_index=True)
         
-        # Save marked sold data
-        if save_marked_sold_data(marked_sold_df):
+        # Save sold data
+        if save_sold_data(sold_df):
             # Delete from plots sheet
             row_nums = [row["SheetRowNum"] for row in rows_data]
             if delete_rows_from_sheet(row_nums):
-                st.success(f"✅ Successfully marked {len(rows_data)} listing(s) as sold!")
+                st.success(f"✅ Successfully marked {len(rows_data)} listing(s) as sold and moved to Sold sheet!")
                 st.cache_data.clear()
                 st.rerun()
             else:
                 st.error("❌ Failed to remove listings from plots sheet.")
         else:
-            st.error("❌ Failed to save marked sold data. Please try again.")
+            st.error("❌ Failed to save sold data. Please try again.")
             
     except Exception as e:
         st.error(f"❌ Error marking listings as sold: {str(e)}")
