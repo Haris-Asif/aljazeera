@@ -452,7 +452,12 @@ def show_plots_manager():
             # Handle Mark as Sold action - FIXED: Now properly removes from Plots and adds to Sold
             if mark_sold_btn:
                 selected_display_rows = [display_df.iloc[idx] for idx in st.session_state.selected_rows]
-                mark_listings_sold(selected_display_rows)
+                success = mark_listings_sold(selected_display_rows)
+                if success:
+                    # Clear selection and refresh data
+                    st.session_state.selected_rows = []
+                    st.cache_data.clear()
+                    st.rerun()
             
             # Handle Delete action
             if delete_btn:
@@ -497,10 +502,12 @@ def show_plots_manager():
         sold_df_filtered = sold_df_filtered[sold_df_filtered["Plot Size"].str.contains(st.session_state.plot_size_filter, case=False, na=False)]
     
     if st.session_state.street_filter:
-        sold_df_filtered = sold_df_filtered[sold_df_filtered["Street No"].str.contains(st.session_state.street_filter, case=False, na=False)]
+        street_pattern = re.compile(re.escape(st.session_state.street_filter), re.IGNORECASE)
+        sold_df_filtered = sold_df_filtered[sold_df_filtered["Street No"].apply(lambda x: bool(street_pattern.search(str(x))))]
     
     if st.session_state.plot_no_filter:
-        sold_df_filtered = sold_df_filtered[sold_df_filtered["Plot No"].str.contains(st.session_state.plot_no_filter, case=False, na=False)]
+        plot_pattern = re.compile(re.escape(st.session_state.plot_no_filter), re.IGNORECASE)
+        sold_df_filtered = sold_df_filtered[sold_df_filtered["Plot No"].apply(lambda x: bool(plot_pattern.search(str(x))))]
     
     # Apply Property Type filter if selected
     if "Property Type" in sold_df_filtered.columns and st.session_state.selected_prop_type and st.session_state.selected_prop_type != "All":
@@ -868,15 +875,17 @@ def mark_listings_sold(rows_data):
             row_nums = [row["SheetRowNum"] for row in rows_data]
             if delete_rows_from_sheet(row_nums):
                 st.success(f"✅ Successfully marked {len(rows_data)} listing(s) as sold and moved to Sold sheet!")
-                st.cache_data.clear()
-                st.rerun()
+                return True
             else:
                 st.error("❌ Failed to remove listings from plots sheet.")
+                return False
         else:
             st.error("❌ Failed to save sold data. Please try again.")
+            return False
             
     except Exception as e:
         st.error(f"❌ Error marking listings as sold: {str(e)}")
+        return False
 
 def show_edit_form(row_data):
     """Show form to edit a listing"""
