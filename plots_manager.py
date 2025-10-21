@@ -58,6 +58,81 @@ def get_dynamic_dealer_names(df, filters):
     dealer_names, contact_to_name = build_name_map(df_temp)
     return dealer_names, contact_to_name
 
+def create_dealer_specific_duplicates_view(df, dealer_contacts):
+    """Create a view of duplicates specific to the selected dealer's listings"""
+    if df.empty or not dealer_contacts:
+        return pd.DataFrame(), pd.DataFrame()
+    
+    # Create a normalized version of key fields for comparison
+    df_normalized = df.copy()
+    df_normalized["Sector_Norm"] = df_normalized["Sector"].astype(str).str.strip().str.upper()
+    df_normalized["Plot_No_Norm"] = df_normalized["Plot No"].astype(str).str.strip().str.upper()
+    df_normalized["Street_No_Norm"] = df_normalized["Street No"].astype(str).str.strip().str.upper()
+    df_normalized["Plot_Size_Norm"] = df_normalized["Plot Size"].astype(str).str.strip().str.upper()
+    
+    # Get listings from the selected dealer
+    dealer_listings = df_normalized[
+        df_normalized["Extracted Contact"].apply(
+            lambda x: any(contact in clean_number(str(x)) for contact in dealer_contacts)
+        )
+    ]
+    
+    if dealer_listings.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    
+    # Create group keys for the dealer's listings
+    dealer_listings["GroupKey"] = dealer_listings.apply(
+        lambda row: f"{row['Sector_Norm']}|{row['Plot_No_Norm']}|{row['Street_No_Norm']}|{row['Plot_Size_Norm']}", 
+        axis=1
+    )
+    
+    # Find all listings that match the dealer's group keys but have different contacts
+    all_matching_listings = []
+    for group_key in dealer_listings["GroupKey"].unique():
+        # Get all listings with this group key
+        matching_listings = df_normalized[
+            df_normalized.apply(
+                lambda row: f"{row['Sector_Norm']}|{row['Plot_No_Norm']}|{row['Street_No_Norm']}|{row['Plot_Size_Norm']}" == group_key,
+                axis=1
+            )
+        ]
+        
+        # Only include if there are multiple different contacts
+        unique_contacts = set()
+        for contact_str in matching_listings["Extracted Contact"]:
+            contacts = [clean_number(c) for c in str(contact_str).split(",") if clean_number(c)]
+            unique_contacts.update(contacts)
+        
+        if len(unique_contacts) > 1:
+            matching_listings = matching_listings.copy()
+            matching_listings["GroupKey"] = group_key
+            all_matching_listings.append(matching_listings)
+    
+    if not all_matching_listings:
+        return pd.DataFrame(), pd.DataFrame()
+    
+    # Combine all duplicates
+    duplicates_df = pd.concat(all_matching_listings, ignore_index=True)
+    
+    # Remove temporary normalized columns
+    duplicates_df = duplicates_df.drop(
+        ["Sector_Norm", "Plot_No_Norm", "Street_No_Norm", "Plot_Size_Norm"], 
+        axis=1, 
+        errors="ignore"
+    )
+    
+    # Create styled version with color grouping
+    styled_duplicates_df = duplicates_df.copy()
+    groups = styled_duplicates_df["GroupKey"].unique()
+    color_mapping = {group: f"hsl({int(i*360/len(groups))}, 70%, 80%)" for i, group in enumerate(groups)}
+    
+    def color_group(row):
+        return [f"background-color: {color_mapping[row['GroupKey']]}"] * len(row)
+    
+    styled_duplicates_df = styled_duplicates_df.style.apply(color_group, axis=1)
+    
+    return styled_duplicates_df, duplicates_df
+
 def show_plots_manager():
     st.header("🏠 Plots Management")
     
@@ -481,6 +556,100 @@ def show_plots_manager():
             
     else:
         st.info("No listings match your filters")
+    
+    # NEW: Dealer-Specific Duplicates Section
+    if st.session_state.selected_dealer:
+        st.markdown("---")
+        st.subheader("👥 Dealer-Specific Duplicates")
+        
+        # Get the selected dealer's contact(s)
+        actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
+        selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
+        
+        # Create dealer-specific duplicates view
+        styled_dealer_duplicates, dealer_duplicates_df = create_dealer_specific_duplicates_view(df, selected_contacts)
+        
+        if not dealer_duplicates_df.empty:
+            st.info(f"Showing duplicate listings for dealer **{actual_name}** - matching Sector, Plot No, Street No, Plot Size but different Contacts/Names")
+            
+            # Display the styled duplicates table with color grouping (read-only)
+            st.markdown("**Color Grouped View (Read-only)**")
+            st.dataframe(styled_dealer_duplicates, width='stretch', hide_index=True)
+            
+            st.markdown("---")
+            st.markdown("**Actionable View (With Checkboxes)**")
+            
+            # Sort dealer duplicates
+            dealer_duplicates_df = sort_dataframe_with_i15_street_no(dealer_duplicates_df)
+            
+            # Display dealer duplicates with checkboxes for actions
+            dealer_duplicates_display_df = dealer_duplicates_df.copy().reset_index(drop=True)
+            dealer_duplicates_display_df.insert(0, "Select", False)
+            
+            # Ensure data types are consistent
+            dealer_duplicates_display_df = safe_dataframe_for_display(dealer_duplicates_display_df)
+            
+            # Action buttons for dealer duplicates
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                dealer_duplicates_select_all = st.checkbox("Select All Dealer Duplicates", key="select_all_dealer_duplicates")
+            with col2:
+                dealer_duplicates_edit_btn = st.button("✏️ Edit Selected", use_container_width=True, key="edit_dealer_duplicates_btn")
+            with col3:
+                dealer_duplicates_delete_btn = st.button("🗑️ Delete Selected", type="primary", use_container_width=True, key="delete_dealer_duplicates_btn")
+            
+            # Handle select all for dealer duplicates
+            if dealer_duplicates_select_all:
+                dealer_duplicates_display_df["Select"] = True
+            
+            # Configure columns for dealer duplicates data editor
+            dealer_duplicates_column_config = {
+                "Select": st.column_config.CheckboxColumn(required=True),
+                "SheetRowNum": st.column_config.NumberColumn(disabled=True),
+                "GroupKey": st.column_config.TextColumn(disabled=True)
+            }
+            
+            # Display dealer duplicates with checkboxes
+            dealer_duplicates_edited_df = st.data_editor(
+                dealer_duplicates_display_df,
+                column_config=dealer_duplicates_column_config,
+                hide_index=True,
+                width='stretch',
+                disabled=dealer_duplicates_display_df.columns.difference(["Select"]).tolist(),
+                key="dealer_duplicates_data_editor"
+            )
+            
+            # Get selected dealer duplicate rows
+            dealer_duplicates_selected_indices = dealer_duplicates_edited_df[dealer_duplicates_edited_df["Select"]].index.tolist()
+            
+            # Handle dealer duplicate listing actions
+            if dealer_duplicates_selected_indices:
+                st.success(f"**{len(dealer_duplicates_selected_indices)} dealer duplicate listing(s) selected**")
+                
+                if dealer_duplicates_edit_btn:
+                    if len(dealer_duplicates_selected_indices) == 1:
+                        st.session_state.edit_mode = True
+                        st.session_state.editing_row = dealer_duplicates_display_df.iloc[dealer_duplicates_selected_indices[0]].to_dict()
+                        st.rerun()
+                    else:
+                        st.warning("Please select only one row to edit.")
+                
+                if dealer_duplicates_delete_btn:
+                    selected_dealer_duplicate_rows = [dealer_duplicates_display_df.iloc[idx] for idx in dealer_duplicates_selected_indices]
+                    dealer_duplicate_row_nums = [int(row["SheetRowNum"]) for row in selected_dealer_duplicate_rows]
+                    
+                    st.warning(f"🗑️ Deleting {len(dealer_duplicate_row_nums)} selected dealer duplicate listing(s)...")
+                    
+                    success = delete_rows_from_sheet(dealer_duplicate_row_nums)
+                    
+                    if success:
+                        st.success(f"✅ Successfully deleted {len(dealer_duplicate_row_nums)} dealer duplicate listing(s)!")
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to delete dealer duplicate listings. Please try again.")
+        else:
+            st.info(f"No dealer-specific duplicates found for **{actual_name}**")
     
     # NEW: Sold Listings Table in Plots Section
     st.markdown("---")
