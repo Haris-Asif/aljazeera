@@ -486,20 +486,20 @@ def show_plots_manager():
     st.markdown("---")
     st.subheader("✅ Sold Listings (Filtered)")
     
-    # Apply the same filters to sold listings
+    # Apply the same filters to sold listings - FIXED: Added proper column existence checks
     sold_df_filtered = sold_df.copy()
     
-    # Apply the same filters to sold data
-    if st.session_state.sector_filter:
+    # Apply the same filters to sold data with safety checks
+    if st.session_state.sector_filter and "Sector" in sold_df_filtered.columns:
         sold_df_filtered = sold_df_filtered[sold_df_filtered["Sector"].str.contains(st.session_state.sector_filter, case=False, na=False)]
     
-    if st.session_state.plot_size_filter:
+    if st.session_state.plot_size_filter and "Plot Size" in sold_df_filtered.columns:
         sold_df_filtered = sold_df_filtered[sold_df_filtered["Plot Size"].str.contains(st.session_state.plot_size_filter, case=False, na=False)]
     
-    if st.session_state.street_filter:
+    if st.session_state.street_filter and "Street No" in sold_df_filtered.columns:
         sold_df_filtered = sold_df_filtered[sold_df_filtered["Street No"].str.contains(st.session_state.street_filter, case=False, na=False)]
     
-    if st.session_state.plot_no_filter:
+    if st.session_state.plot_no_filter and "Plot No" in sold_df_filtered.columns:
         sold_df_filtered = sold_df_filtered[sold_df_filtered["Plot No"].str.contains(st.session_state.plot_no_filter, case=False, na=False)]
     
     # Apply Property Type filter if selected
@@ -865,7 +865,7 @@ def mark_listings_sold(rows_data):
         # Save sold data
         if save_sold_data(sold_df):
             # Delete from plots sheet
-            row_nums = [row["SheetRowNum"] for row in rows_data]
+            row_nums = [int(row_data["SheetRowNum"]) for row_data in rows_data]
             if delete_rows_from_sheet(row_nums):
                 st.success(f"✅ Successfully marked {len(rows_data)} listing(s) as sold and moved to Sold sheet!")
                 st.cache_data.clear()
