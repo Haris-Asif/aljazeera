@@ -446,6 +446,34 @@ def show_plots_manager():
         cols = [col for col in df_filtered.columns if col != "Timestamp"] + ["Timestamp"]
         df_filtered = df_filtered[cols]
 
+    # NEW: Create filtered display table based on criteria
+    display_main_table = df_filtered.copy()
+    
+    # Define I-15 sectors
+    i15_sectors = ["I-15", "I-15/1", "I-15/2", "I-15/3", "I-15/4"]
+    
+    # Filter for display: Non-I-15 sectors need Sector, Plot No, Plot Size, Demand
+    # I-15 sectors need Sector, Plot No, Plot Size, Demand, Street No
+    def is_valid_listing(row):
+        sector = str(row.get("Sector", "")).strip()
+        plot_no = str(row.get("Plot No", "")).strip()
+        plot_size = str(row.get("Plot Size", "")).strip()
+        demand = str(row.get("Demand", "")).strip()
+        street_no = str(row.get("Street No", "")).strip()
+        
+        # Check basic required fields
+        if not (sector and plot_no and plot_size and demand):
+            return False
+        
+        # For I-15 sectors, also require Street No
+        if any(i15_sector in sector for i15_sector in i15_sectors):
+            return bool(street_no)
+        
+        return True
+    
+    # Apply the filtering
+    display_main_table = display_main_table[display_main_table.apply(is_valid_listing, axis=1)]
+
     st.subheader("📋 Filtered Listings")
     
     # Count WhatsApp eligible listings (using the same logic as before)
@@ -465,12 +493,12 @@ def show_plots_manager():
             continue
         whatsapp_eligible_count += 1
     
-    st.info(f"📊 **Total filtered listings:** {len(df_filtered)} | ✅ **WhatsApp eligible:** {whatsapp_eligible_count}")
+    st.info(f"📊 **Total filtered listings:** {len(display_main_table)} | ✅ **WhatsApp eligible:** {whatsapp_eligible_count}")
     
     # FIXED: SIMPLIFIED DELETION PROCESS WITH DATA TYPE FIXES
-    if not df_filtered.empty:
+    if not display_main_table.empty:
         # Create display dataframe with selection
-        display_df = df_filtered.copy().reset_index(drop=True)
+        display_df = display_main_table.copy().reset_index(drop=True)
         display_df.insert(0, "Select", False)
         
         # Ensure all data types are consistent for display
