@@ -61,7 +61,7 @@ def get_dynamic_dealer_names(df, filters):
 def create_dealer_specific_duplicates_view(df, dealer_contacts):
     """Create a view of duplicates specific to the selected dealer's listings"""
     if df.empty or not dealer_contacts:
-        return pd.DataFrame(), pd.DataFrame()
+        return None, pd.DataFrame()
     
     # Create a normalized version of key fields for comparison
     df_normalized = df.copy()
@@ -78,7 +78,7 @@ def create_dealer_specific_duplicates_view(df, dealer_contacts):
     ]
     
     if dealer_listings.empty:
-        return pd.DataFrame(), pd.DataFrame()
+        return None, pd.DataFrame()
     
     # Create group keys for the dealer's listings
     dealer_listings["GroupKey"] = dealer_listings.apply(
@@ -109,7 +109,7 @@ def create_dealer_specific_duplicates_view(df, dealer_contacts):
             all_matching_listings.append(matching_listings)
     
     if not all_matching_listings:
-        return pd.DataFrame(), pd.DataFrame()
+        return None, pd.DataFrame()
     
     # Combine all duplicates
     duplicates_df = pd.concat(all_matching_listings, ignore_index=True)
@@ -121,17 +121,19 @@ def create_dealer_specific_duplicates_view(df, dealer_contacts):
         errors="ignore"
     )
     
-    # Create styled version with color grouping
-    styled_duplicates_df = duplicates_df.copy()
-    groups = styled_duplicates_df["GroupKey"].unique()
-    color_mapping = {group: f"hsl({int(i*360/len(groups))}, 70%, 80%)" for i, group in enumerate(groups)}
-    
-    def color_group(row):
-        return [f"background-color: {color_mapping[row['GroupKey']]}"] * len(row)
-    
-    styled_duplicates_df = styled_duplicates_df.style.apply(color_group, axis=1)
-    
-    return styled_duplicates_df, duplicates_df
+    # Create styled version with color grouping - FIXED: Ensure it's a proper Styler
+    try:
+        groups = duplicates_df["GroupKey"].unique()
+        color_mapping = {group: f"hsl({int(i*360/len(groups))}, 70%, 80%)" for i, group in enumerate(groups)}
+        
+        def color_group(row):
+            return [f"background-color: {color_mapping[row['GroupKey']]}"] * len(row)
+        
+        styled_duplicates_df = duplicates_df.style.apply(color_group, axis=1)
+        return styled_duplicates_df, duplicates_df
+    except Exception as e:
+        # If styling fails, return None for styled version
+        return None, duplicates_df
 
 def show_plots_manager():
     st.header("🏠 Plots Management")
@@ -557,7 +559,7 @@ def show_plots_manager():
     else:
         st.info("No listings match your filters")
     
-    # NEW: Dealer-Specific Duplicates Section
+    # NEW: Dealer-Specific Duplicates Section - FIXED
     if st.session_state.selected_dealer:
         st.markdown("---")
         st.subheader("👥 Dealer-Specific Duplicates")
@@ -574,7 +576,19 @@ def show_plots_manager():
             
             # Display the styled duplicates table with color grouping (read-only)
             st.markdown("**Color Grouped View (Read-only)**")
-            st.dataframe(styled_dealer_duplicates, width='stretch', hide_index=True)
+            
+            # FIX: Convert Styler object to HTML and display using st.markdown
+            try:
+                if styled_dealer_duplicates is not None:
+                    # Get the HTML representation of the styled dataframe
+                    styled_html = styled_dealer_duplicates.to_html()
+                    st.markdown(styled_html, unsafe_allow_html=True)
+                else:
+                    st.dataframe(dealer_duplicates_df, width='stretch', hide_index=True)
+            except Exception as e:
+                # Fallback: display regular dataframe without styling
+                st.warning("Could not display styled table. Showing regular table instead.")
+                st.dataframe(dealer_duplicates_df, width='stretch', hide_index=True)
             
             st.markdown("---")
             st.markdown("**Actionable View (With Checkboxes)**")
@@ -809,7 +823,7 @@ def show_plots_manager():
     else:
         st.info("No listings available to check for completeness")
     
-    # UPDATED: Duplicate Listings Section with Checkboxes AND Color Grouping
+    # UPDATED: Duplicate Listings Section with Checkboxes AND Color Grouping - FIXED
     st.markdown("---")
     st.subheader("👥 Duplicate Listings Detection")
     
@@ -824,7 +838,19 @@ def show_plots_manager():
             
             # FIRST: Display the styled duplicates table with color grouping (read-only)
             st.markdown("**Color Grouped View (Read-only)**")
-            st.dataframe(styled_duplicates_df, width='stretch', hide_index=True)
+            
+            # FIX: Convert Styler object to HTML and display using st.markdown
+            try:
+                if styled_duplicates_df is not None:
+                    # Get the HTML representation of the styled dataframe
+                    styled_html = styled_duplicates_df.to_html()
+                    st.markdown(styled_html, unsafe_allow_html=True)
+                else:
+                    st.dataframe(duplicates_df, width='stretch', hide_index=True)
+            except Exception as e:
+                # Fallback: display regular dataframe without styling
+                st.warning("Could not display styled table. Showing regular table instead.")
+                st.dataframe(duplicates_df, width='stretch', hide_index=True)
             
             st.markdown("---")
             st.markdown("**Actionable View (With Checkboxes)**")
