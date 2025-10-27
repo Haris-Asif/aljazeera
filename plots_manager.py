@@ -8,7 +8,7 @@ from utils import (load_plot_data, load_contacts, delete_rows_from_sheet,
                   parse_price, update_plot_data, load_sold_data, save_sold_data,
                   generate_sold_id, sort_dataframe, safe_dataframe_for_display, _extract_int)
 from utils import fuzzy_feature_match
-from datetime import datetime
+from datetime import datetime, timedelta
 
 def get_dynamic_dealer_names(df, filters):
     """Get dealer names based on current filter settings"""
@@ -134,6 +134,93 @@ def create_dealer_specific_duplicates_view(df, dealer_contacts):
     except Exception as e:
         # If styling fails, return None for styled version
         return None, duplicates_df
+
+def get_todays_unique_listings(df):
+    """Get listings with new combinations of Sector, Plot No, Street No, Plot Size added today"""
+    if df.empty:
+        return pd.DataFrame()
+    
+    # Get today's date
+    today = datetime.now().date()
+    
+    # Filter listings from today
+    today_listings = df.copy()
+    today_listings['Date'] = pd.to_datetime(today_listings['Timestamp']).dt.date
+    today_listings = today_listings[today_listings['Date'] == today]
+    
+    if today_listings.empty:
+        return pd.DataFrame()
+    
+    # Filter listings from before today
+    before_today_listings = df.copy()
+    before_today_listings['Date'] = pd.to_datetime(before_today_listings['Timestamp']).dt.date
+    before_today_listings = before_today_listings[before_today_listings['Date'] < today]
+    
+    # Create normalized key combinations for comparison
+    today_listings["CombinationKey"] = today_listings.apply(
+        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}|{str(row.get('Street No', '')).strip().upper()}|{str(row.get('Plot Size', '')).strip().upper()}", 
+        axis=1
+    )
+    
+    before_today_listings["CombinationKey"] = before_today_listings.apply(
+        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}|{str(row.get('Street No', '')).strip().upper()}|{str(row.get('Plot Size', '')).strip().upper()}", 
+        axis=1
+    )
+    
+    # Get unique keys from before today
+    existing_keys = set(before_today_listings["CombinationKey"].unique())
+    
+    # Filter today's listings to only include new combinations
+    unique_today_listings = today_listings[~today_listings["CombinationKey"].isin(existing_keys)]
+    
+    # Drop the temporary columns
+    unique_today_listings = unique_today_listings.drop(["Date", "CombinationKey"], axis=1, errors="ignore")
+    
+    return unique_today_listings
+
+def get_this_weeks_unique_listings(df):
+    """Get listings with new combinations of Sector, Plot No, Street No, Plot Size added in the last 7 days"""
+    if df.empty:
+        return pd.DataFrame()
+    
+    # Get dates for this week (last 7 days including today)
+    today = datetime.now().date()
+    week_ago = today - timedelta(days=7)
+    
+    # Filter listings from the last 7 days
+    this_week_listings = df.copy()
+    this_week_listings['Date'] = pd.to_datetime(this_week_listings['Timestamp']).dt.date
+    this_week_listings = this_week_listings[this_week_listings['Date'] >= week_ago]
+    
+    if this_week_listings.empty:
+        return pd.DataFrame()
+    
+    # Filter listings from before this week
+    before_week_listings = df.copy()
+    before_week_listings['Date'] = pd.to_datetime(before_week_listings['Timestamp']).dt.date
+    before_week_listings = before_week_listings[before_week_listings['Date'] < week_ago]
+    
+    # Create normalized key combinations for comparison
+    this_week_listings["CombinationKey"] = this_week_listings.apply(
+        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}|{str(row.get('Street No', '')).strip().upper()}|{str(row.get('Plot Size', '')).strip().upper()}", 
+        axis=1
+    )
+    
+    before_week_listings["CombinationKey"] = before_week_listings.apply(
+        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}|{str(row.get('Street No', '')).strip().upper()}|{str(row.get('Plot Size', '')).strip().upper()}", 
+        axis=1
+    )
+    
+    # Get unique keys from before this week
+    existing_keys = set(before_week_listings["CombinationKey"].unique())
+    
+    # Filter this week's listings to only include new combinations
+    unique_week_listings = this_week_listings[~this_week_listings["CombinationKey"].isin(existing_keys)]
+    
+    # Drop the temporary columns
+    unique_week_listings = unique_week_listings.drop(["Date", "CombinationKey"], axis=1, errors="ignore")
+    
+    return unique_week_listings
 
 def show_plots_manager():
     st.header("🏠 Plots Management")
@@ -495,6 +582,80 @@ def show_plots_manager():
     
     st.info(f"📊 **Total filtered listings:** {len(display_main_table)} | ✅ **WhatsApp eligible:** {whatsapp_eligible_count}")
     
+    # NEW: Today's Unique Listings Section
+    st.markdown("---")
+    st.subheader("🆕 Today's Unique Listings")
+    
+    # Get today's unique listings
+    todays_unique_listings = get_todays_unique_listings(df)
+    
+    if not todays_unique_listings.empty:
+        # Apply the same filters to today's unique listings
+        todays_unique_filtered = todays_unique_listings.copy()
+        
+        # Apply the same filters that were applied to the main table
+        if st.session_state.selected_dealer:
+            actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
+            selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
+            todays_unique_filtered = todays_unique_filtered[todays_unique_filtered["Extracted Contact"].apply(
+                lambda x: any(c in clean_number(str(x)) for c in selected_contacts))]
+        
+        if st.session_state.sector_filter:
+            todays_unique_filtered = todays_unique_filtered[todays_unique_filtered["Sector"].apply(lambda x: sector_matches(st.session_state.sector_filter, str(x)))]
+        
+        # Continue applying other filters...
+        
+        # Sort and display
+        todays_unique_filtered = sort_dataframe_with_i15_street_no(todays_unique_filtered)
+        
+        st.info(f"Found {len(todays_unique_filtered)} unique listings added today with new Sector/Plot No/Street No/Plot Size combinations")
+        
+        # Display today's unique listings in a compact, scrollable table
+        st.dataframe(
+            todays_unique_filtered,
+            use_container_width=True,
+            height=300
+        )
+    else:
+        st.info("No unique listings found for today")
+    
+    # NEW: This Week's Unique Listings Section
+    st.markdown("---")
+    st.subheader("📅 This Week's Unique Listings")
+    
+    # Get this week's unique listings
+    weeks_unique_listings = get_this_weeks_unique_listings(df)
+    
+    if not weeks_unique_listings.empty:
+        # Apply the same filters to this week's unique listings
+        weeks_unique_filtered = weeks_unique_listings.copy()
+        
+        # Apply the same filters that were applied to the main table
+        if st.session_state.selected_dealer:
+            actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
+            selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
+            weeks_unique_filtered = weeks_unique_filtered[weeks_unique_filtered["Extracted Contact"].apply(
+                lambda x: any(c in clean_number(str(x)) for c in selected_contacts))]
+        
+        if st.session_state.sector_filter:
+            weeks_unique_filtered = weeks_unique_filtered[weeks_unique_filtered["Sector"].apply(lambda x: sector_matches(st.session_state.sector_filter, str(x)))]
+        
+        # Continue applying other filters...
+        
+        # Sort and display
+        weeks_unique_filtered = sort_dataframe_with_i15_street_no(weeks_unique_filtered)
+        
+        st.info(f"Found {len(weeks_unique_filtered)} unique listings added in the last 7 days with new Sector/Plot No/Street No/Plot Size combinations")
+        
+        # Display this week's unique listings in a compact, scrollable table
+        st.dataframe(
+            weeks_unique_filtered,
+            use_container_width=True,
+            height=300
+        )
+    else:
+        st.info("No unique listings found for this week")
+    
     # FIXED: SIMPLIFIED DELETION PROCESS WITH DATA TYPE FIXES
     if not display_main_table.empty:
         # Create display dataframe with selection
@@ -605,18 +766,23 @@ def show_plots_manager():
             # Display the styled duplicates table with color grouping (read-only)
             st.markdown("**Color Grouped View (Read-only)**")
             
-            # FIX: Convert Styler object to HTML and display using st.markdown
+            # FIX: Make the table compact and scrollable
             try:
                 if styled_dealer_duplicates is not None:
                     # Get the HTML representation of the styled dataframe
                     styled_html = styled_dealer_duplicates.to_html()
-                    st.markdown(styled_html, unsafe_allow_html=True)
+                    # Make it compact and scrollable
+                    st.markdown(
+                        f'<div style="height: 400px; overflow: auto; border: 1px solid #e6e9ef; border-radius: 0.5rem;">{styled_html}</div>', 
+                        unsafe_allow_html=True
+                    )
                 else:
-                    st.dataframe(dealer_duplicates_df, width='stretch', hide_index=True)
+                    # Fallback: display regular dataframe in scrollable container
+                    st.dataframe(dealer_duplicates_df, width='stretch', height=400, hide_index=True)
             except Exception as e:
                 # Fallback: display regular dataframe without styling
                 st.warning("Could not display styled table. Showing regular table instead.")
-                st.dataframe(dealer_duplicates_df, width='stretch', hide_index=True)
+                st.dataframe(dealer_duplicates_df, width='stretch', height=400, hide_index=True)
             
             st.markdown("---")
             st.markdown("**Actionable View (With Checkboxes)**")
@@ -867,18 +1033,23 @@ def show_plots_manager():
             # FIRST: Display the styled duplicates table with color grouping (read-only)
             st.markdown("**Color Grouped View (Read-only)**")
             
-            # FIX: Convert Styler object to HTML and display using st.markdown
+            # FIX: Make the table compact and scrollable
             try:
                 if styled_duplicates_df is not None:
                     # Get the HTML representation of the styled dataframe
                     styled_html = styled_duplicates_df.to_html()
-                    st.markdown(styled_html, unsafe_allow_html=True)
+                    # Make it compact and scrollable
+                    st.markdown(
+                        f'<div style="height: 400px; overflow: auto; border: 1px solid #e6e9ef; border-radius: 0.5rem;">{styled_html}</div>', 
+                        unsafe_allow_html=True
+                    )
                 else:
-                    st.dataframe(duplicates_df, width='stretch', hide_index=True)
+                    # Fallback: display regular dataframe in scrollable container
+                    st.dataframe(duplicates_df, width='stretch', height=400, hide_index=True)
             except Exception as e:
                 # Fallback: display regular dataframe without styling
                 st.warning("Could not display styled table. Showing regular table instead.")
-                st.dataframe(duplicates_df, width='stretch', hide_index=True)
+                st.dataframe(duplicates_df, width='stretch', height=400, hide_index=True)
             
             st.markdown("---")
             st.markdown("**Actionable View (With Checkboxes)**")
