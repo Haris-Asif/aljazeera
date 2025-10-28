@@ -222,6 +222,26 @@ def get_this_weeks_unique_listings(df):
     
     return unique_week_listings
 
+def safe_display_dataframe(df, height=300):
+    """Safely display dataframe with error handling for Arrow conversion issues"""
+    if df.empty:
+        return
+    
+    try:
+        # First try to use safe_dataframe_for_display
+        safe_df = safe_dataframe_for_display(df)
+        st.dataframe(safe_df, use_container_width=True, height=height)
+    except Exception as e:
+        try:
+            # If that fails, try converting all columns to string
+            st.warning("Displaying data as strings due to conversion issues")
+            string_df = df.astype(str)
+            st.dataframe(string_df, use_container_width=True, height=height)
+        except Exception as e2:
+            # If all else fails, use table view
+            st.error(f"Could not display dataframe properly: {str(e2)}")
+            st.table(df.head(50))  # Limit to first 50 rows to prevent overflow
+
 def show_plots_manager():
     st.header("🏠 Plots Management")
     
@@ -603,19 +623,15 @@ def show_plots_manager():
         if st.session_state.sector_filter:
             todays_unique_filtered = todays_unique_filtered[todays_unique_filtered["Sector"].apply(lambda x: sector_matches(st.session_state.sector_filter, str(x)))]
         
-        # Continue applying other filters...
+        # Continue applying other filters as needed...
         
         # Sort and display
         todays_unique_filtered = sort_dataframe_with_i15_street_no(todays_unique_filtered)
         
         st.info(f"Found {len(todays_unique_filtered)} unique listings added today with new Sector/Plot No/Street No/Plot Size combinations")
         
-        # Display today's unique listings in a compact, scrollable table
-        st.dataframe(
-            todays_unique_filtered,
-            use_container_width=True,
-            height=300
-        )
+        # Use safe display function
+        safe_display_dataframe(todays_unique_filtered, height=300)
     else:
         st.info("No unique listings found for today")
     
@@ -640,19 +656,15 @@ def show_plots_manager():
         if st.session_state.sector_filter:
             weeks_unique_filtered = weeks_unique_filtered[weeks_unique_filtered["Sector"].apply(lambda x: sector_matches(st.session_state.sector_filter, str(x)))]
         
-        # Continue applying other filters...
+        # Continue applying other filters as needed...
         
         # Sort and display
         weeks_unique_filtered = sort_dataframe_with_i15_street_no(weeks_unique_filtered)
         
         st.info(f"Found {len(weeks_unique_filtered)} unique listings added in the last 7 days with new Sector/Plot No/Street No/Plot Size combinations")
         
-        # Display this week's unique listings in a compact, scrollable table
-        st.dataframe(
-            weeks_unique_filtered,
-            use_container_width=True,
-            height=300
-        )
+        # Use safe display function to handle the Arrow conversion error
+        safe_display_dataframe(weeks_unique_filtered, height=300)
     else:
         st.info("No unique listings found for this week")
     
@@ -778,11 +790,11 @@ def show_plots_manager():
                     )
                 else:
                     # Fallback: display regular dataframe in scrollable container
-                    st.dataframe(dealer_duplicates_df, width='stretch', height=400, hide_index=True)
+                    safe_display_dataframe(dealer_duplicates_df, height=400)
             except Exception as e:
                 # Fallback: display regular dataframe without styling
                 st.warning("Could not display styled table. Showing regular table instead.")
-                st.dataframe(dealer_duplicates_df, width='stretch', height=400, hide_index=True)
+                safe_display_dataframe(dealer_duplicates_df, height=400)
             
             st.markdown("---")
             st.markdown("**Actionable View (With Checkboxes)**")
@@ -889,15 +901,8 @@ def show_plots_manager():
     if not sold_df_filtered.empty:
         st.info(f"Showing {len(sold_df_filtered)} sold listings matching your filters")
         
-        # Display sold listings
-        display_columns = ["Sector", "Plot No", "Street No", "Plot Size", "Sale Price", "Buyer Name", "Agent", "Sale Date"]
-        available_columns = [col for col in display_columns if col in sold_df_filtered.columns]
-        
-        st.dataframe(
-            sold_df_filtered[available_columns],
-            use_container_width=True,
-            height=300
-        )
+        # Display sold listings using safe function
+        safe_display_dataframe(sold_df_filtered, height=300)
     else:
         st.info("No sold listings match your filters")
     
@@ -1045,11 +1050,11 @@ def show_plots_manager():
                     )
                 else:
                     # Fallback: display regular dataframe in scrollable container
-                    st.dataframe(duplicates_df, width='stretch', height=400, hide_index=True)
+                    safe_display_dataframe(duplicates_df, height=400)
             except Exception as e:
                 # Fallback: display regular dataframe without styling
                 st.warning("Could not display styled table. Showing regular table instead.")
-                st.dataframe(duplicates_df, width='stretch', height=400, hide_index=True)
+                safe_display_dataframe(duplicates_df, height=400)
             
             st.markdown("---")
             st.markdown("**Actionable View (With Checkboxes)**")
