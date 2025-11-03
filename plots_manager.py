@@ -6,7 +6,8 @@ from utils import (load_plot_data, load_contacts, delete_rows_from_sheet,
                   extract_numbers, clean_number, format_phone_link, 
                   get_all_unique_features, filter_by_date, create_duplicates_view_updated,
                   parse_price, update_plot_data, load_sold_data, save_sold_data,
-                  generate_sold_id, sort_dataframe, safe_dataframe_for_display, _extract_int)
+                  generate_sold_id, sort_dataframe, safe_dataframe_for_display, _extract_int,
+                  load_hold_data, save_hold_data, move_to_hold, move_to_plots)
 from utils import fuzzy_feature_match
 from datetime import datetime, timedelta
 
@@ -242,7 +243,7 @@ def safe_display_dataframe(df, height=300):
             st.error(f"Could not display dataframe properly: {str(e2)}")
             st.table(df.head(50))  # Limit to first 50 rows to prevent overflow
 
-def display_table_with_actions(df, table_name, height=300):
+def display_table_with_actions(df, table_name, height=300, show_hold_button=True):
     """Display dataframe with edit/delete actions for any table"""
     if df.empty:
         st.info(f"No data available for {table_name}")
@@ -255,16 +256,32 @@ def display_table_with_actions(df, table_name, height=300):
     # Ensure all data types are consistent for display
     display_df = safe_dataframe_for_display(display_df)
     
-    # Action buttons row
-    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-    with col1:
-        select_all = st.checkbox(f"Select All {table_name} Rows", key=f"select_all_{table_name}")
-    with col2:
-        edit_btn = st.button("✏️ Edit Selected", use_container_width=True, key=f"edit_{table_name}")
-    with col3:
-        mark_sold_btn = st.button("✅ Mark as Sold", use_container_width=True, key=f"mark_sold_{table_name}")
-    with col4:
-        delete_btn = st.button("🗑️ Delete Selected", type="primary", use_container_width=True, key=f"delete_{table_name}")
+    # Action buttons row - Updated to include Hold button conditionally
+    if show_hold_button:
+        col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
+        with col1:
+            select_all = st.checkbox(f"Select All {table_name} Rows", key=f"select_all_{table_name}")
+        with col2:
+            edit_btn = st.button("✏️ Edit Selected", use_container_width=True, key=f"edit_{table_name}")
+        with col3:
+            mark_sold_btn = st.button("✅ Mark as Sold", use_container_width=True, key=f"mark_sold_{table_name}")
+        with col4:
+            hold_btn = st.button("⏸️ Hold", use_container_width=True, key=f"hold_{table_name}")
+        with col5:
+            delete_btn = st.button("🗑️ Delete Selected", type="primary", use_container_width=True, key=f"delete_{table_name}")
+    else:
+        # For Hold table, show Move To Available Data button instead of Hold button
+        col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
+        with col1:
+            select_all = st.checkbox(f"Select All {table_name} Rows", key=f"select_all_{table_name}")
+        with col2:
+            edit_btn = st.button("✏️ Edit Selected", use_container_width=True, key=f"edit_{table_name}")
+        with col3:
+            mark_sold_btn = st.button("✅ Mark as Sold", use_container_width=True, key=f"mark_sold_{table_name}")
+        with col4:
+            move_to_available_btn = st.button("🔄 Move To Available", use_container_width=True, key=f"move_available_{table_name}")
+        with col5:
+            delete_btn = st.button("🗑️ Delete Selected", type="primary", use_container_width=True, key=f"delete_{table_name}")
     
     # Handle select all functionality
     if select_all:
@@ -293,11 +310,12 @@ def display_table_with_actions(df, table_name, height=300):
     if selected_indices:
         st.success(f"**{len(selected_indices)} row(s) selected in {table_name}**")
         
-        # Handle Edit action
+        # Handle Edit action - FIXED: Properly show edit form
         if edit_btn:
             if len(selected_indices) == 1:
                 st.session_state.edit_mode = True
                 st.session_state.editing_row = display_df.iloc[selected_indices[0]].to_dict()
+                st.session_state.editing_table = table_name
                 st.rerun()
             else:
                 st.warning("Please select only one row to edit.")
@@ -306,6 +324,16 @@ def display_table_with_actions(df, table_name, height=300):
         if mark_sold_btn:
             selected_display_rows = [display_df.iloc[idx] for idx in selected_indices]
             mark_listings_sold(selected_display_rows)
+        
+        # Handle Hold action (only for non-hold tables)
+        if show_hold_button and hold_btn:
+            selected_display_rows = [display_df.iloc[idx] for idx in selected_indices]
+            move_listings_to_hold(selected_display_rows, table_name)
+        
+        # Handle Move To Available action (only for hold table)
+        if not show_hold_button and move_to_available_btn:
+            selected_display_rows = [display_df.iloc[idx] for idx in selected_indices]
+            move_listings_to_plots(selected_display_rows)
         
         # Handle Delete action
         if delete_btn:
@@ -334,6 +362,7 @@ def show_plots_manager():
     df = load_plot_data().fillna("")
     contacts_df = load_contacts()
     sold_df = load_sold_data()
+    hold_df = load_hold_data().fillna("")
     
     # Add row numbers to contacts for deletion
     if not contacts_df.empty:
@@ -346,6 +375,8 @@ def show_plots_manager():
         st.session_state.edit_mode = False
     if 'editing_row' not in st.session_state:
         st.session_state.editing_row = None
+    if 'editing_table' not in st.session_state:
+        st.session_state.editing_table = None
     
     # Initialize session state for filters
     if 'filters_reset' not in st.session_state:
@@ -571,6 +602,10 @@ def show_plots_manager():
     st.session_state.selected_dealer = current_filters['selected_dealer']
     st.session_state.selected_saved = current_filters['selected_saved']
 
+    # Show edit form if in edit mode - FIXED: Show at the top
+    if st.session_state.edit_mode and st.session_state.editing_row is not None:
+        show_edit_form(st.session_state.editing_row, st.session_state.editing_table)
+
     # Display dealer contact info if selected
     if st.session_state.selected_dealer:
         actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
@@ -705,25 +740,66 @@ def show_plots_manager():
         contact = str(row.get("Extracted Contact", "")).strip()
         name = str(row.get("Extracted Name", "")).strip()
         
-        # NEW: Check for non-empty contact and name
-        if not contact or not name:
-            continue
-            
+        # UPDATED: Check for whatsapp eligibility with new criteria
         if not (sector and plot_no and size and price):
             continue
         if "I-15/" in sector and not street:
             continue
         if "series" in plot_no.lower():
             continue
+        if "offer required" in price.lower():
+            continue
+        if not contact and not name:
+            continue
+            
         whatsapp_eligible_count += 1
     
     st.info(f"📊 **Total filtered listings:** {len(display_main_table)} | ✅ **WhatsApp eligible:** {whatsapp_eligible_count}")
     
     # Display main table with actions
     if not display_main_table.empty:
-        display_table_with_actions(display_main_table, "Main", height=300)
+        display_table_with_actions(display_main_table, "Main", height=300, show_hold_button=True)
     else:
         st.info("No listings match your filters")
+    
+    # NEW: Listings on Hold Section
+    st.markdown("---")
+    st.subheader("⏸️ Listings on Hold")
+    
+    # Apply the same filters to hold listings
+    hold_df_filtered = hold_df.copy()
+    
+    # Apply the same filters that were applied to the main table
+    if st.session_state.selected_dealer:
+        actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
+        selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
+        hold_df_filtered = hold_df_filtered[hold_df_filtered["Extracted Contact"].apply(
+            lambda x: any(c in clean_number(str(x)) for c in selected_contacts))]
+    
+    if st.session_state.sector_filter:
+        hold_df_filtered = hold_df_filtered[hold_df_filtered["Sector"].apply(lambda x: sector_matches(st.session_state.sector_filter, str(x)))]
+    
+    if st.session_state.plot_size_filter:
+        hold_df_filtered = hold_df_filtered[hold_df_filtered["Plot Size"].str.contains(st.session_state.plot_size_filter, case=False, na=False)]
+    
+    if st.session_state.street_filter:
+        street_pattern = re.compile(re.escape(st.session_state.street_filter), re.IGNORECASE)
+        hold_df_filtered = hold_df_filtered[hold_df_filtered["Street No"].apply(lambda x: bool(street_pattern.search(str(x))))]
+    
+    if st.session_state.plot_no_filter:
+        plot_pattern = re.compile(re.escape(st.session_state.plot_no_filter), re.IGNORECASE)
+        hold_df_filtered = hold_df_filtered[hold_df_filtered["Plot No"].apply(lambda x: bool(plot_pattern.search(str(x))))]
+    
+    # Sort hold listings
+    hold_df_filtered = sort_dataframe_with_i15_street_no(hold_df_filtered)
+    
+    if not hold_df_filtered.empty:
+        st.info(f"Showing {len(hold_df_filtered)} listings on hold matching your filters")
+        
+        # Display hold listings with actions (show Move To Available button instead of Hold button)
+        display_table_with_actions(hold_df_filtered, "Hold", height=300, show_hold_button=False)
+    else:
+        st.info("No listings on hold match your filters")
     
     # NEW: Today's Unique Listings Section
     st.markdown("---")
@@ -754,7 +830,7 @@ def show_plots_manager():
         st.info(f"Found {len(todays_unique_filtered)} unique listings added today with new Sector/Plot No/Street No/Plot Size combinations")
         
         # Display with actions
-        display_table_with_actions(todays_unique_filtered, "Today_Unique", height=300)
+        display_table_with_actions(todays_unique_filtered, "Today_Unique", height=300, show_hold_button=True)
     else:
         st.info("No unique listings found for today")
     
@@ -787,7 +863,7 @@ def show_plots_manager():
         st.info(f"Found {len(weeks_unique_filtered)} unique listings added in the last 7 days with new Sector/Plot No/Street No/Plot Size combinations")
         
         # Display with actions
-        display_table_with_actions(weeks_unique_filtered, "Week_Unique", height=300)
+        display_table_with_actions(weeks_unique_filtered, "Week_Unique", height=300, show_hold_button=True)
     else:
         st.info("No unique listings found for this week")
     
@@ -834,7 +910,7 @@ def show_plots_manager():
             dealer_duplicates_df = sort_dataframe_with_i15_street_no(dealer_duplicates_df)
             
             # Display dealer duplicates with actions
-            display_table_with_actions(dealer_duplicates_df, "Dealer_Duplicates", height=400)
+            display_table_with_actions(dealer_duplicates_df, "Dealer_Duplicates", height=400, show_hold_button=True)
         else:
             st.info(f"No dealer-specific duplicates found for **{actual_name}**")
     
@@ -869,11 +945,11 @@ def show_plots_manager():
         st.info(f"Showing {len(sold_df_filtered)} sold listings matching your filters")
         
         # Display sold listings using safe function with actions
-        display_table_with_actions(sold_df_filtered, "Sold", height=300)
+        display_table_with_actions(sold_df_filtered, "Sold", height=300, show_hold_button=True)
     else:
         st.info("No sold listings match your filters")
     
-    # NEW: Incomplete Listings Section
+    # UPDATED: Incomplete Listings Section with new criteria
     st.markdown("---")
     st.subheader("❌ Incomplete Listings")
     
@@ -889,8 +965,10 @@ def show_plots_manager():
             size = str(row.get("Plot Size", "")).strip()
             price = str(row.get("Demand", "")).strip()
             street = str(row.get("Street No", "")).strip()
+            contact = str(row.get("Extracted Contact", "")).strip()
+            name = str(row.get("Extracted Name", "")).strip()
             
-            # Check if listing is incomplete
+            # UPDATED: Check if listing is incomplete with new criteria
             missing_fields = []
             if not sector:
                 missing_fields.append("Sector")
@@ -903,7 +981,11 @@ def show_plots_manager():
             if "I-15/" in sector and not street:
                 missing_fields.append("Street No")
             if "series" in plot_no.lower():
-                missing_fields.append("Valid Plot No")
+                missing_fields.append("Valid Plot No (contains 'series')")
+            if "offer required" in price.lower():
+                missing_fields.append("Valid Demand (contains 'offer required')")
+            if not contact and not name:
+                missing_fields.append("Both Contact and Name are empty")
             
             if missing_fields:
                 row_dict = row.to_dict()
@@ -919,7 +1001,7 @@ def show_plots_manager():
             st.info(f"Found {len(incomplete_df)} listings with missing information")
             
             # Display incomplete listings with actions
-            display_table_with_actions(incomplete_df, "Incomplete", height=300)
+            display_table_with_actions(incomplete_df, "Incomplete", height=300, show_hold_button=True)
         else:
             st.info("🎉 All filtered listings have complete information!")
     else:
@@ -966,7 +1048,7 @@ def show_plots_manager():
             duplicates_df = sort_dataframe_with_i15_street_no(duplicates_df)
             
             # Display duplicates with actions
-            display_table_with_actions(duplicates_df, "Duplicates", height=400)
+            display_table_with_actions(duplicates_df, "Duplicates", height=400, show_hold_button=True)
     else:
         st.info("No listings to analyze for duplicates")
 
@@ -1007,7 +1089,7 @@ def show_plots_manager():
         # UPDATED: Generate WhatsApp messages with enhanced filtering
         messages = generate_whatsapp_messages_with_enhanced_filtering(df_filtered)
         if not messages:
-            st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price, Contact, Name; I-15 must have Street No; No 'series' plots; No duplicates with same Sector/Plot No/Street No/Plot Size/Demand.")
+            st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots; No 'offer required' in demand; No duplicates with same Sector/Plot No/Street No/Plot Size/Demand.")
         else:
             st.success(f"📨 Generated {len(messages)} WhatsApp message(s)")
             
@@ -1036,19 +1118,15 @@ def generate_whatsapp_messages_with_enhanced_filtering(df):
         size = str(row.get("Plot Size", "")).strip()
         price = str(row.get("Demand", "")).strip()
         street = str(row.get("Street No", "")).strip()
-        contact = str(row.get("Extracted Contact", "")).strip()
-        name = str(row.get("Extracted Name", "")).strip()
         
-        # NEW: Skip listings with empty contact or name
-        if not contact or not name:
-            continue
-            
-        # Existing criteria
+        # UPDATED: WhatsApp eligibility criteria (removed contact/name check)
         if not (sector and plot_no and size and price):
             continue
         if "I-15/" in sector and not street:
             continue
         if "series" in plot_no.lower():
+            continue
+        if "offer required" in price.lower():
             continue
             
         eligible_listings.append(row)
@@ -1059,7 +1137,7 @@ def generate_whatsapp_messages_with_enhanced_filtering(df):
     # Convert to DataFrame for easier processing
     eligible_df = pd.DataFrame(eligible_listings)
     
-    # NEW: Remove duplicates with same Sector, Plot No, Street No, Plot Size, Demand
+    # UPDATED: Remove duplicates with same Sector, Plot No, Street No, Plot Size, Demand
     # Keep only the one with lowest demand
     eligible_df["ParsedPrice"] = eligible_df["Demand"].apply(parse_price)
     
@@ -1182,8 +1260,90 @@ def mark_listings_sold(rows_data):
     except Exception as e:
         st.error(f"❌ Error marking listings as sold: {str(e)}")
 
-def show_edit_form(row_data):
-    """Show form to edit a listing"""
+def move_listings_to_hold(rows_data, source_table):
+    """Move selected listings to Hold sheet"""
+    try:
+        # Load existing hold data
+        hold_df = load_hold_data()
+        
+        # Add each selected row to hold data
+        for row_data in rows_data:
+            new_hold_record = {
+                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Sector": row_data.get("Sector", ""),
+                "Plot No": row_data.get("Plot No", ""),
+                "Street No": row_data.get("Street No", ""),
+                "Plot Size": row_data.get("Plot Size", ""),
+                "Demand": row_data.get("Demand", ""),
+                "Features": row_data.get("Features", ""),
+                "Property Type": row_data.get("Property Type", ""),
+                "Extracted Name": row_data.get("Extracted Name", ""),
+                "Extracted Contact": row_data.get("Extracted Contact", ""),
+                "Hold Date": datetime.now().strftime("%Y-%m-%d"),
+                "Hold Reason": f"Moved from {source_table}",
+                "Original Row Num": row_data.get("SheetRowNum", "")
+            }
+            
+            hold_df = pd.concat([hold_df, pd.DataFrame([new_hold_record])], ignore_index=True)
+        
+        # Save hold data
+        if save_hold_data(hold_df):
+            # Delete from original sheet
+            row_nums = [int(row_data["SheetRowNum"]) for row_data in rows_data]
+            if move_to_hold(row_nums):
+                st.success(f"✅ Successfully moved {len(rows_data)} listing(s) to Hold!")
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error("❌ Failed to remove listings from original sheet.")
+        else:
+            st.error("❌ Failed to save hold data. Please try again.")
+            
+    except Exception as e:
+        st.error(f"❌ Error moving listings to hold: {str(e)}")
+
+def move_listings_to_plots(rows_data):
+    """Move selected listings from Hold back to Plots sheet"""
+    try:
+        # Load existing plot data
+        plot_df = load_plot_data()
+        
+        # Add each selected row to plot data with current timestamp
+        for row_data in rows_data:
+            new_plot_record = {
+                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "Sector": row_data.get("Sector", ""),
+                "Plot No": row_data.get("Plot No", ""),
+                "Street No": row_data.get("Street No", ""),
+                "Plot Size": row_data.get("Plot Size", ""),
+                "Demand": row_data.get("Demand", ""),
+                "Features": row_data.get("Features", ""),
+                "Property Type": row_data.get("Property Type", ""),
+                "Extracted Name": row_data.get("Extracted Name", ""),
+                "Extracted Contact": row_data.get("Extracted Contact", ""),
+                "Original Row Num": row_data.get("SheetRowNum", "")
+            }
+            
+            plot_df = pd.concat([plot_df, pd.DataFrame([new_plot_record])], ignore_index=True)
+        
+        # Save plot data
+        if update_plot_data(plot_df):
+            # Delete from hold sheet
+            row_nums = [int(row_data["SheetRowNum"]) for row_data in rows_data]
+            if move_to_plots(row_nums):
+                st.success(f"✅ Successfully moved {len(rows_data)} listing(s) back to Available Plots!")
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error("❌ Failed to remove listings from hold sheet.")
+        else:
+            st.error("❌ Failed to save plot data. Please try again.")
+            
+    except Exception as e:
+        st.error(f"❌ Error moving listings to plots: {str(e)}")
+
+def show_edit_form(row_data, table_name):
+    """Show form to edit a listing - FIXED: Proper edit functionality"""
     st.markdown("---")
     st.subheader("✏️ Edit Listing")
     
@@ -1219,17 +1379,34 @@ def show_edit_form(row_data):
             updated_row["Extracted Name"] = extracted_name
             updated_row["Extracted Contact"] = extracted_contact
             
-            # Save to Google Sheets
-            if update_plot_data(updated_row):
-                st.success("✅ Listing updated successfully!")
-                st.session_state.edit_mode = False
-                st.session_state.editing_row = None
-                st.cache_data.clear()
-                st.rerun()
+            # Save to Google Sheets based on the source table
+            if table_name == "Hold":
+                # Update hold data
+                hold_df = load_hold_data()
+                row_num = int(row_data.get("SheetRowNum", 0)) - 2  # Adjust for header and 1-based indexing
+                if 0 <= row_num < len(hold_df):
+                    for key, value in updated_row.items():
+                        if key in hold_df.columns and key != "SheetRowNum":
+                            hold_df.at[row_num, key] = value
+                    if save_hold_data(hold_df):
+                        st.success("✅ Hold listing updated successfully!")
+                    else:
+                        st.error("❌ Failed to update hold listing.")
             else:
-                st.error("❌ Failed to update listing. Please try again.")
+                # Update plot data using existing function
+                if update_plot_data(updated_row):
+                    st.success("✅ Listing updated successfully!")
+                else:
+                    st.error("❌ Failed to update listing. Please try again.")
+            
+            st.session_state.edit_mode = False
+            st.session_state.editing_row = None
+            st.session_state.editing_table = None
+            st.cache_data.clear()
+            st.rerun()
         
         if cancel:
             st.session_state.edit_mode = False
             st.session_state.editing_row = None
+            st.session_state.editing_table = None
             st.rerun()
