@@ -1363,3 +1363,51 @@ def save_sold_data(df):
 def generate_sold_id():
     """Generate unique ID for sold listings"""
     return f"S{int(datetime.now().timestamp())}"
+
+def load_hold_data():
+    """Load data from the Hold sheet"""
+    try:
+        sheet = client.open(SHEET_NAME).worksheet("Hold")
+        data = sheet.get_all_records()
+        return pd.DataFrame(data)
+    except Exception as e:
+        st.error(f"Error loading hold data: {e}")
+        return pd.DataFrame()
+
+def save_hold_data(df):
+    """Save data to the Hold sheet"""
+    try:
+        sheet = client.open(SHEET_NAME).worksheet("Hold")
+        sheet.clear()
+        if not df.empty:
+            # Prepare data for writing
+            data = [df.columns.tolist()] + df.values.tolist()
+            sheet.update(data, value_input_option='RAW')
+        return True
+    except Exception as e:
+        st.error(f"Error saving hold data: {e}")
+        return False
+
+def move_to_hold(row_nums):
+    """Move rows from Plots to Hold sheet"""
+    try:
+        return delete_rows_from_sheet(row_nums)  # Reuse existing delete function
+    except Exception as e:
+        st.error(f"Error moving to hold: {e}")
+        return False
+
+def move_to_plots(row_nums):
+    """Move rows from Hold to Plots sheet"""
+    try:
+        # Load hold data
+        hold_df = load_hold_data()
+        
+        # Remove the specified rows
+        if not hold_df.empty:
+            hold_df = hold_df[~hold_df.index.isin([i-2 for i in row_nums])]  # Adjust for header
+        
+        # Save updated hold data
+        return save_hold_data(hold_df)
+    except Exception as e:
+        st.error(f"Error moving to plots: {e}")
+        return False
