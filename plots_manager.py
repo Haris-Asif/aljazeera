@@ -6,10 +6,31 @@ from utils import (load_plot_data, load_contacts, delete_rows_from_sheet,
                   extract_numbers, clean_number, format_phone_link, 
                   get_all_unique_features, filter_by_date, create_duplicates_view_updated,
                   parse_price, update_plot_data, load_sold_data, save_sold_data,
-                  generate_sold_id, sort_dataframe, safe_dataframe_for_display, _extract_int,
-                  load_hold_data, save_hold_data, move_to_hold, move_to_plots)
+                  generate_sold_id, sort_dataframe, safe_dataframe_for_display, _extract_int)
 from utils import fuzzy_feature_match
 from datetime import datetime, timedelta
+
+# Import hold functions with fallbacks
+try:
+    from utils import load_hold_data, save_hold_data, move_to_hold, move_to_plots
+except ImportError:
+    st.error("⚠️ Hold functions not found in utils.py. Please add the required functions.")
+    
+    # Fallback implementations
+    def load_hold_data():
+        return pd.DataFrame()
+    
+    def save_hold_data(df):
+        st.error("Hold functionality not available")
+        return False
+    
+    def move_to_hold(row_nums):
+        st.error("Hold functionality not available")
+        return False
+    
+    def move_to_plots(row_nums):
+        st.error("Hold functionality not available")
+        return False
 
 def get_dynamic_dealer_names(df, filters):
     """Get dealer names based on current filter settings"""
