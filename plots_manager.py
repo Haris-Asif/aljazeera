@@ -6,10 +6,31 @@ from utils import (load_plot_data, load_contacts, delete_rows_from_sheet,
                   extract_numbers, clean_number, format_phone_link, 
                   get_all_unique_features, filter_by_date, create_duplicates_view_updated,
                   parse_price, update_plot_data, load_sold_data, save_sold_data,
-                  generate_sold_id, sort_dataframe, safe_dataframe_for_display, _extract_int,
-                  load_hold_data, save_hold_data, move_to_hold, move_to_plots, save_plot_data)
+                  generate_sold_id, sort_dataframe, safe_dataframe_for_display, _extract_int)
 from utils import fuzzy_feature_match
 from datetime import datetime, timedelta
+
+# Import hold functions with fallbacks
+try:
+    from utils import load_hold_data, save_hold_data, move_to_hold, move_to_plots
+except ImportError:
+    st.error("⚠️ Hold functions not found in utils.py. Please add the required functions.")
+    
+    # Fallback implementations
+    def load_hold_data():
+        return pd.DataFrame()
+    
+    def save_hold_data(df):
+        st.error("Hold functionality not available")
+        return False
+    
+    def move_to_hold(row_nums):
+        st.error("Hold functionality not available")
+        return False
+    
+    def move_to_plots(row_nums):
+        st.error("Hold functionality not available")
+        return False
 
 def get_dynamic_dealer_names(df, filters):
     """Get dealer names based on current filter settings"""
@@ -262,26 +283,26 @@ def display_table_with_actions(df, table_name, height=300, show_hold_button=True
         with col1:
             select_all = st.checkbox(f"Select All {table_name} Rows", key=f"select_all_{table_name}")
         with col2:
-            edit_btn = st.button("✏️ Edit Selected", width='stretch', key=f"edit_{table_name}")
+            edit_btn = st.button("✏️ Edit Selected", use_container_width=True, key=f"edit_{table_name}")
         with col3:
-            mark_sold_btn = st.button("✅ Mark as Sold", width='stretch', key=f"mark_sold_{table_name}")
+            mark_sold_btn = st.button("✅ Mark as Sold", use_container_width=True, key=f"mark_sold_{table_name}")
         with col4:
-            hold_btn = st.button("⏸️ Hold", width='stretch', key=f"hold_{table_name}")
+            hold_btn = st.button("⏸️ Hold", use_container_width=True, key=f"hold_{table_name}")
         with col5:
-            delete_btn = st.button("🗑️ Delete Selected", type="primary", width='stretch', key=f"delete_{table_name}")
+            delete_btn = st.button("🗑️ Delete Selected", type="primary", use_container_width=True, key=f"delete_{table_name}")
     else:
         # For Hold table, show Move To Available Data button instead of Hold button
         col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
         with col1:
             select_all = st.checkbox(f"Select All {table_name} Rows", key=f"select_all_{table_name}")
         with col2:
-            edit_btn = st.button("✏️ Edit Selected", width='stretch', key=f"edit_{table_name}")
+            edit_btn = st.button("✏️ Edit Selected", use_container_width=True, key=f"edit_{table_name}")
         with col3:
-            mark_sold_btn = st.button("✅ Mark as Sold", width='stretch', key=f"mark_sold_{table_name}")
+            mark_sold_btn = st.button("✅ Mark as Sold", use_container_width=True, key=f"mark_sold_{table_name}")
         with col4:
-            move_to_available_btn = st.button("🔄 Move To Available", width='stretch', key=f"move_available_{table_name}")
+            move_to_available_btn = st.button("🔄 Move To Available", use_container_width=True, key=f"move_available_{table_name}")
         with col5:
-            delete_btn = st.button("🗑️ Delete Selected", type="primary", width='stretch', key=f"delete_{table_name}")
+            delete_btn = st.button("🗑️ Delete Selected", type="primary", use_container_width=True, key=f"delete_{table_name}")
     
     # Handle select all functionality
     if select_all:
@@ -566,7 +587,7 @@ def show_plots_manager():
             st.rerun()
         
         # Reset Filters Button
-        if st.button("🔄 Reset All Filters", width='stretch', key="reset_filters_btn"):
+        if st.button("🔄 Reset All Filters", use_container_width=True, key="reset_filters_btn"):
             # Reset all filter session states
             st.session_state.sector_filter = ""
             st.session_state.plot_size_filter = ""
@@ -1303,14 +1324,13 @@ def move_listings_to_hold(rows_data, source_table):
         st.error(f"❌ Error moving listings to hold: {str(e)}")
 
 def move_listings_to_plots(rows_data):
-    """Move selected listings from Hold back to Plots sheet - FIXED VERSION"""
+    """Move selected listings from Hold back to Plots sheet"""
     try:
         # Load existing plot data
         plot_df = load_plot_data()
         
         # Add each selected row to plot data with current timestamp
         for row_data in rows_data:
-            # Create a new plot record without Hold-specific columns
             new_plot_record = {
                 "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "Sector": row_data.get("Sector", ""),
@@ -1321,14 +1341,14 @@ def move_listings_to_plots(rows_data):
                 "Features": row_data.get("Features", ""),
                 "Property Type": row_data.get("Property Type", ""),
                 "Extracted Name": row_data.get("Extracted Name", ""),
-                "Extracted Contact": row_data.get("Extracted Contact", "")
+                "Extracted Contact": row_data.get("Extracted Contact", ""),
+                "Original Row Num": row_data.get("SheetRowNum", "")
             }
             
-            # Add the new record to the plot dataframe
             plot_df = pd.concat([plot_df, pd.DataFrame([new_plot_record])], ignore_index=True)
         
-        # Save the ENTIRE plot dataframe using the proper function
-        if save_plot_data(plot_df):  # FIXED: Use save_plot_data instead of update_plot_data
+        # Save plot data
+        if update_plot_data(plot_df):
             # Delete from hold sheet
             row_nums = [int(row_data["SheetRowNum"]) for row_data in rows_data]
             if move_to_plots(row_nums):
@@ -1394,7 +1414,7 @@ def show_edit_form(row_data, table_name):
                     else:
                         st.error("❌ Failed to update hold listing.")
             else:
-                # Update plot data using existing function (for single row updates)
+                # Update plot data using existing function
                 if update_plot_data(updated_row):
                     st.success("✅ Listing updated successfully!")
                 else:
