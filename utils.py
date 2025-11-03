@@ -33,8 +33,16 @@ TASKS_SHEET = "Tasks"
 APPOINTMENTS_SHEET = "Appointments"
 SOLD_SHEET = "Sold"
 MARKED_SOLD_SHEET = "MarkedSold"
+HOLD_SHEET = "Hold"  # NEW: Added Hold sheet constant
 BATCH_SIZE = 10
 API_DELAY = 1
+
+# Hold sheet headers
+HOLD_HEADERS = [
+    "Timestamp", "Sector", "Plot No", "Street No", "Plot Size", "Demand", 
+    "Features", "Property Type", "Extracted Name", "Extracted Contact", 
+    "Hold Date", "Hold Reason", "Original Row Num"
+]
 
 # Enums
 class LeadStatus(Enum):
@@ -542,6 +550,105 @@ def load_marked_sold_data():
     except Exception as e:
         st.error(f"Error loading marked sold data: {str(e)}")
         return pd.DataFrame()
+
+# NEW: Fixed Hold Functions
+@st.cache_data(ttl=300, show_spinner="Loading hold data...")
+def load_hold_data():
+    """Load data from the Hold sheet"""
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return pd.DataFrame()
+            
+        try:
+            sheet = client.open(SPREADSHEET_NAME).worksheet(HOLD_SHEET)
+        except gspread.exceptions.WorksheetNotFound:
+            # Create the Hold sheet if it doesn't exist
+            spreadsheet = client.open(SPREADSHEET_NAME)
+            sheet = spreadsheet.add_worksheet(title=HOLD_SHEET, rows=100, cols=len(HOLD_HEADERS))
+            # Add headers
+            sheet.append_row(HOLD_HEADERS)
+            return pd.DataFrame(columns=HOLD_HEADERS)
+            
+        df = pd.DataFrame(sheet.get_all_records())
+        if not df.empty:
+            df["SheetRowNum"] = [i + 2 for i in range(len(df))]
+            
+            # Ensure consistent data types
+            if "Plot No" in df.columns:
+                df["Plot No"] = df["Plot No"].astype(str)
+            if "Street No" in df.columns:
+                df["Street No"] = df["Street No"].astype(str)
+            if "Plot Size" in df.columns:
+                df["Plot Size"] = df["Plot Size"].astype(str)
+            if "Sector" in df.columns:
+                df["Sector"] = df["Sector"].astype(str)
+                
+        return df
+    except Exception as e:
+        st.error(f"Error loading hold data: {str(e)}")
+        return pd.DataFrame()
+
+def save_hold_data(df):
+    """Save data to the Hold sheet"""
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return False
+            
+        try:
+            sheet = client.open(SPREADSHEET_NAME).worksheet(HOLD_SHEET)
+        except gspread.exceptions.WorksheetNotFound:
+            # Create the Hold sheet if it doesn't exist
+            spreadsheet = client.open(SPREADSHEET_NAME)
+            sheet = spreadsheet.add_worksheet(title=HOLD_SHEET, rows=100, cols=len(HOLD_HEADERS))
+            # Add headers
+            sheet.append_row(HOLD_HEADERS)
+        
+        # Clear the sheet and add headers
+        sheet.clear()
+        headers = df.columns.tolist()
+        sheet.append_row(headers)
+        
+        # Add data in batches to avoid API limits
+        for i in range(0, len(df), BATCH_SIZE):
+            batch = df.iloc[i:i+BATCH_SIZE]
+            rows = []
+            for _, row in batch.iterrows():
+                rows.append(row.tolist())
+            sheet.append_rows(rows)
+            time.sleep(API_DELAY)
+            
+        st.cache_data.clear()  # Clear cache to refresh data
+        return True
+    except Exception as e:
+        st.error(f"Error saving hold data: {str(e)}")
+        return False
+
+def move_to_hold(row_nums):
+    """Move rows from Plots to Hold sheet"""
+    try:
+        return delete_rows_from_sheet(row_nums)  # Reuse existing delete function
+    except Exception as e:
+        st.error(f"Error moving to hold: {e}")
+        return False
+
+def move_to_plots(row_nums):
+    """Move rows from Hold to Plots sheet"""
+    try:
+        # Load hold data
+        hold_df = load_hold_data()
+        
+        # Remove the specified rows
+        if not hold_df.empty:
+            # Adjust for header and 1-based indexing
+            hold_df = hold_df[~hold_df.index.isin([i-2 for i in row_nums])]
+        
+        # Save updated hold data
+        return save_hold_data(hold_df)
+    except Exception as e:
+        st.error(f"Error moving to plots: {e}")
+        return False
 
 @st.cache_data(ttl=300, show_spinner="Loading leads...")
 def load_leads():
@@ -1289,125 +1396,3 @@ def fuzzy_feature_match(row_features, selected_features):
         if match:
             return True
     return False
-
-def update_plot_data(updated_row):
-    """Update a specific plot row in Google Sheets"""
-    try:
-        client = get_gsheet_client()
-        if not client:
-            return False
-            
-        sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
-        
-        # Get all data to find the row
-        all_data = sheet.get_all_records()
-        row_num = updated_row.get("SheetRowNum")
-        
-        if row_num and row_num >= 2:
-            # Update the specific row
-            row_values = []
-            headers = sheet.row_values(1)
-            
-            for header in headers:
-                row_values.append(updated_row.get(header, ""))
-            
-            sheet.update(f"A{row_num}:{chr(64 + len(headers))}{row_num}", [row_values])
-            st.cache_data.clear()  # Clear cache to refresh data
-            return True
-        else:
-            st.error("Invalid row number for update")
-            return False
-            
-    except Exception as e:
-        st.error(f"Error updating plot data: {str(e)}")
-        return False
-
-def save_sold_data(df):
-    """Save sold data to Google Sheets"""
-    try:
-        client = get_gsheet_client()
-        if not client:
-            return False
-            
-        try:
-            sheet = client.open(SPREADSHEET_NAME).worksheet(SOLD_SHEET)
-        except gspread.exceptions.WorksheetNotFound:
-            spreadsheet = client.open(SPREADSHEET_NAME)
-            sheet = spreadsheet.add_worksheet(title=SOLD_SHEET, rows=100, cols=25)
-            headers = [
-                "ID", "Timestamp", "Sector", "Plot No", "Street No", "Plot Size", "Demand", 
-                "Features", "Property Type", "Extracted Name", "Extracted Contact", 
-                "Buyer Name", "Buyer Contact", "Sale Date", "Sale Price", "Commission",
-                "Agent", "Notes", "Original Row Num"
-            ]
-            sheet.append_row(headers)
-        
-        sheet.clear()
-        headers = df.columns.tolist()
-        sheet.append_row(headers)
-        
-        for i in range(0, len(df), BATCH_SIZE):
-            batch = df.iloc[i:i+BATCH_SIZE]
-            rows = []
-            for _, row in batch.iterrows():
-                rows.append(row.tolist())
-            sheet.append_rows(rows)
-            time.sleep(API_DELAY)
-            
-        st.cache_data.clear()  # Clear cache to refresh data
-        return True
-    except Exception as e:
-        st.error(f"Error saving sold data: {str(e)}")
-        return False
-
-def generate_sold_id():
-    """Generate unique ID for sold listings"""
-    return f"S{int(datetime.now().timestamp())}"
-
-def load_hold_data():
-    """Load data from the Hold sheet"""
-    try:
-        sheet = client.open(SHEET_NAME).worksheet("Hold")
-        data = sheet.get_all_records()
-        return pd.DataFrame(data)
-    except Exception as e:
-        st.error(f"Error loading hold data: {e}")
-        return pd.DataFrame()
-
-def save_hold_data(df):
-    """Save data to the Hold sheet"""
-    try:
-        sheet = client.open(SHEET_NAME).worksheet("Hold")
-        sheet.clear()
-        if not df.empty:
-            # Prepare data for writing
-            data = [df.columns.tolist()] + df.values.tolist()
-            sheet.update(data, value_input_option='RAW')
-        return True
-    except Exception as e:
-        st.error(f"Error saving hold data: {e}")
-        return False
-
-def move_to_hold(row_nums):
-    """Move rows from Plots to Hold sheet"""
-    try:
-        return delete_rows_from_sheet(row_nums)  # Reuse existing delete function
-    except Exception as e:
-        st.error(f"Error moving to hold: {e}")
-        return False
-
-def move_to_plots(row_nums):
-    """Move rows from Hold to Plots sheet"""
-    try:
-        # Load hold data
-        hold_df = load_hold_data()
-        
-        # Remove the specified rows
-        if not hold_df.empty:
-            hold_df = hold_df[~hold_df.index.isin([i-2 for i in row_nums])]  # Adjust for header
-        
-        # Save updated hold data
-        return save_hold_data(hold_df)
-    except Exception as e:
-        st.error(f"Error moving to plots: {e}")
-        return False
