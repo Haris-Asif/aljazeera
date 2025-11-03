@@ -1396,3 +1396,36 @@ def fuzzy_feature_match(row_features, selected_features):
         if match:
             return True
     return False
+
+def save_plot_data(df):
+    """Save the entire DataFrame to the Plots sheet"""
+    try:
+        client = get_gsheet_client()
+        if not client:
+            return False
+            
+        sheet = client.open(SPREADSHEET_NAME).worksheet(PLOTS_SHEET)
+        
+        # Remove internal columns if they exist
+        columns_to_drop = ["SheetRowNum"]
+        df_to_save = df.drop(columns=columns_to_drop, errors="ignore")
+        
+        # Clear the sheet and add headers
+        sheet.clear()
+        headers = df_to_save.columns.tolist()
+        sheet.append_row(headers)
+        
+        # Add data in batches to avoid API limits
+        for i in range(0, len(df_to_save), BATCH_SIZE):
+            batch = df_to_save.iloc[i:i+BATCH_SIZE]
+            rows = []
+            for _, row in batch.iterrows():
+                rows.append(row.tolist())
+            sheet.append_rows(rows)
+            time.sleep(API_DELAY)
+            
+        st.cache_data.clear()  # Clear cache to refresh data
+        return True
+    except Exception as e:
+        st.error(f"Error saving plot data: {str(e)}")
+        return False
