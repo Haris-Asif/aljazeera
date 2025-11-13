@@ -9,6 +9,15 @@ from utils import (load_plot_data, load_contacts, delete_rows_from_sheet,
                   generate_sold_id, sort_dataframe, safe_dataframe_for_display, _extract_int)
 from utils import fuzzy_feature_match
 from datetime import datetime, timedelta
+from io import BytesIO
+try:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
 
 # Import hold functions with fallbacks
 try:
@@ -75,6 +84,17 @@ def get_dynamic_dealer_names(df, filters):
     
     # Apply date filter
     df_temp = filter_by_date(df_temp, filters.get('date_filter', 'All'))
+    
+    # Apply missing contact filter if enabled
+    if filters.get('missing_contact_filter'):
+        # When enabled, show all listings (no filtering based on contact/name)
+        pass
+    else:
+        # When disabled, only show listings that have at least one of Extracted Contact or Extracted Name
+        df_temp = df_temp[
+            ~(df_temp["Extracted Contact"].isna() | (df_temp["Extracted Contact"] == "")) | 
+            ~(df_temp["Extracted Name"].isna() | (df_temp["Extracted Name"] == ""))
+        ]
     
     # Build dealer names from the filtered data
     dealer_names, contact_to_name = build_name_map(df_temp)
@@ -289,7 +309,7 @@ def display_table_with_actions(df, table_name, height=300, show_hold_button=True
         with col4:
             hold_btn = st.button("⏸️ Hold", use_container_width=True, key=f"hold_{table_name}")
         with col5:
-            delete_btn = st.button("🗑️ Delete Selected", type="primary", use_container_width=True, key=f"delete_{table_name}")
+            delete_btn = st.button("🗑️ Delete Selected", type="primary", key=f"delete_{table_name}")
     else:
         # For Hold table, show Move To Available Data button instead of Hold button
         col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
@@ -302,7 +322,7 @@ def display_table_with_actions(df, table_name, height=300, show_hold_button=True
         with col4:
             move_to_available_btn = st.button("🔄 Move To Available", use_container_width=True, key=f"move_available_{table_name}")
         with col5:
-            delete_btn = st.button("🗑️ Delete Selected", type="primary", use_container_width=True, key=f"delete_{table_name}")
+            delete_btn = st.button("🗑️ Delete Selected", type="primary", key=f"delete_{table_name}")
     
     # Handle select all functionality
     if select_all:
@@ -375,6 +395,92 @@ def display_table_with_actions(df, table_name, height=300, show_hold_button=True
                 st.rerun()
             else:
                 st.error("❌ Failed to delete rows. Please try again.")
+
+def generate_dealer_contacts_pdf(dealer_names, contact_to_name, contacts_df):
+    """Generate a PDF with dealer contacts information"""
+    if not REPORTLAB_AVAILABLE:
+        st.error("PDF generation requires reportlab library. Please install it using: pip install reportlab")
+        return None
+    
+    try:
+        # Create a buffer for the PDF
+        buffer = BytesIO()
+        
+        # Create the PDF document
+        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        elements = []
+        
+        # Add title
+        styles = getSampleStyleSheet()
+        title_style = styles['Heading1']
+        title = Paragraph("Dealer Contacts Report", title_style)
+        elements.append(title)
+        elements.append(Paragraph("<br/>", styles['Normal']))
+        
+        # Prepare data for the table
+        table_data = [['Name', 'Contact 1', 'Contact 2', 'Contact 3']]
+        
+        # Process dealer names to get actual names
+        actual_names = []
+        for dealer in dealer_names:
+            if ". " in dealer:
+                actual_names.append(dealer.split(". ", 1)[1])
+            else:
+                actual_names.append(dealer)
+        
+        # Remove duplicates and sort
+        unique_names = sorted(set(actual_names))
+        
+        # Build the table data
+        for name in unique_names:
+            # Find all contacts for this dealer
+            dealer_contacts = []
+            for contact, contact_name in contact_to_name.items():
+                if contact_name == name:
+                    dealer_contacts.append(contact)
+            
+            # Get up to 3 contacts
+            contacts_row = [name]
+            for i in range(3):
+                if i < len(dealer_contacts):
+                    contacts_row.append(dealer_contacts[i])
+                else:
+                    contacts_row.append("")
+            
+            table_data.append(contacts_row)
+        
+        # Create the table
+        table = Table(table_data)
+        
+        # Add style to table
+        style = TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ])
+        
+        table.setStyle(style)
+        elements.append(table)
+        
+        # Build PDF
+        doc.build(elements)
+        
+        # Get PDF data
+        pdf_data = buffer.getvalue()
+        buffer.close()
+        
+        return pdf_data
+    
+    except Exception as e:
+        st.error(f"Error generating PDF: {str(e)}")
+        return None
 
 def show_plots_manager():
     st.header("🏠 Plots Management")
@@ -529,7 +635,7 @@ def show_plots_manager():
         )
         current_filters['selected_prop_type'] = selected_prop_type
 
-        # NEW: Missing Contact filter
+        # FIXED: Missing Contact filter
         if 'missing_contact_filter' not in st.session_state or st.session_state.filters_reset:
             st.session_state.missing_contact_filter = False
         missing_contact_filter = st.checkbox(
@@ -561,6 +667,19 @@ def show_plots_manager():
             key="dealer_input"
         )
         current_filters['selected_dealer'] = selected_dealer
+
+        # NEW: Download PDF button for dealer contacts
+        if dealer_names and contact_to_name:
+            if st.button("📄 Download Dealer Contacts PDF", use_container_width=True):
+                pdf_data = generate_dealer_contacts_pdf(dealer_names, contact_to_name, contacts_df)
+                if pdf_data:
+                    st.download_button(
+                        label="⬇️ Download PDF Now",
+                        data=pdf_data,
+                        file_name="dealer_contacts.pdf",
+                        mime="application/pdf",
+                        use_container_width=True
+                    )
 
         contact_names = [""] + sorted(contacts_df["Name"].dropna().unique()) if not contacts_df.empty else [""]
         
@@ -689,13 +808,12 @@ def show_plots_manager():
     if "Property Type" in df_filtered.columns and st.session_state.selected_prop_type and st.session_state.selected_prop_type != "All":
         df_filtered = df_filtered[df_filtered["Property Type"].astype(str).str.strip() == st.session_state.selected_prop_type]
 
-    # NEW: Apply Missing Contact filter
-    if st.session_state.missing_contact_filter:
+    # FIXED: Apply Missing Contact filter properly
+    if not st.session_state.missing_contact_filter:
+        # When disabled, only show listings that have at least one of Extracted Contact or Extracted Name
         df_filtered = df_filtered[
-            (df_filtered["Extracted Contact"].isna()) | 
-            (df_filtered["Extracted Contact"] == "") |
-            (df_filtered["Extracted Name"].isna()) | 
-            (df_filtered["Extracted Name"] == "")
+            ~(df_filtered["Extracted Contact"].isna() | (df_filtered["Extracted Contact"] == "")) | 
+            ~(df_filtered["Extracted Name"].isna() | (df_filtered["Extracted Name"] == ""))
         ]
 
     # Price filtering (only if prices can be parsed)
@@ -811,6 +929,13 @@ def show_plots_manager():
         plot_pattern = re.compile(re.escape(st.session_state.plot_no_filter), re.IGNORECASE)
         hold_df_filtered = hold_df_filtered[hold_df_filtered["Plot No"].apply(lambda x: bool(plot_pattern.search(str(x))))]
     
+    # FIXED: Apply Missing Contact filter to hold listings
+    if not st.session_state.missing_contact_filter:
+        hold_df_filtered = hold_df_filtered[
+            ~(hold_df_filtered["Extracted Contact"].isna() | (hold_df_filtered["Extracted Contact"] == "")) | 
+            ~(hold_df_filtered["Extracted Name"].isna() | (hold_df_filtered["Extracted Name"] == ""))
+        ]
+    
     # Sort hold listings
     hold_df_filtered = sort_dataframe_with_i15_street_no(hold_df_filtered)
     
@@ -843,7 +968,12 @@ def show_plots_manager():
         if st.session_state.sector_filter:
             todays_unique_filtered = todays_unique_filtered[todays_unique_filtered["Sector"].apply(lambda x: sector_matches(st.session_state.sector_filter, str(x)))]
         
-        # Continue applying other filters as needed...
+        # FIXED: Apply Missing Contact filter to today's unique listings
+        if not st.session_state.missing_contact_filter:
+            todays_unique_filtered = todays_unique_filtered[
+                ~(todays_unique_filtered["Extracted Contact"].isna() | (todays_unique_filtered["Extracted Contact"] == "")) | 
+                ~(todays_unique_filtered["Extracted Name"].isna() | (todays_unique_filtered["Extracted Name"] == ""))
+            ]
         
         # Sort and display
         todays_unique_filtered = sort_dataframe_with_i15_street_no(todays_unique_filtered)
@@ -876,7 +1006,12 @@ def show_plots_manager():
         if st.session_state.sector_filter:
             weeks_unique_filtered = weeks_unique_filtered[weeks_unique_filtered["Sector"].apply(lambda x: sector_matches(st.session_state.sector_filter, str(x)))]
         
-        # Continue applying other filters as needed...
+        # FIXED: Apply Missing Contact filter to this week's unique listings
+        if not st.session_state.missing_contact_filter:
+            weeks_unique_filtered = weeks_unique_filtered[
+                ~(weeks_unique_filtered["Extracted Contact"].isna() | (weeks_unique_filtered["Extracted Contact"] == "")) | 
+                ~(weeks_unique_filtered["Extracted Name"].isna() | (weeks_unique_filtered["Extracted Name"] == ""))
+            ]
         
         # Sort and display
         weeks_unique_filtered = sort_dataframe_with_i15_street_no(weeks_unique_filtered)
@@ -899,6 +1034,13 @@ def show_plots_manager():
         
         # Create dealer-specific duplicates view
         styled_dealer_duplicates, dealer_duplicates_df = create_dealer_specific_duplicates_view(df, selected_contacts)
+        
+        # FIXED: Apply Missing Contact filter to dealer duplicates
+        if not st.session_state.missing_contact_filter and not dealer_duplicates_df.empty:
+            dealer_duplicates_df = dealer_duplicates_df[
+                ~(dealer_duplicates_df["Extracted Contact"].isna() | (dealer_duplicates_df["Extracted Contact"] == "")) | 
+                ~(dealer_duplicates_df["Extracted Name"].isna() | (dealer_duplicates_df["Extracted Name"] == ""))
+            ]
         
         if not dealer_duplicates_df.empty:
             st.info(f"Showing duplicate listings for dealer **{actual_name}** - matching Sector, Plot No, Street No, Plot Size but different Contacts/Names")
@@ -959,6 +1101,14 @@ def show_plots_manager():
     if "Property Type" in sold_df_filtered.columns and st.session_state.selected_prop_type and st.session_state.selected_prop_type != "All":
         sold_df_filtered = sold_df_filtered[sold_df_filtered["Property Type"].astype(str).str.strip() == st.session_state.selected_prop_type]
     
+    # FIXED: Apply Missing Contact filter to sold listings
+    if not st.session_state.missing_contact_filter:
+        if "Extracted Contact" in sold_df_filtered.columns and "Extracted Name" in sold_df_filtered.columns:
+            sold_df_filtered = sold_df_filtered[
+                ~(sold_df_filtered["Extracted Contact"].isna() | (sold_df_filtered["Extracted Contact"] == "")) | 
+                ~(sold_df_filtered["Extracted Name"].isna() | (sold_df_filtered["Extracted Name"] == ""))
+            ]
+    
     # Sort sold listings
     sold_df_filtered = sort_dataframe_with_i15_street_no(sold_df_filtered)
     
@@ -970,7 +1120,7 @@ def show_plots_manager():
     else:
         st.info("No sold listings match your filters")
     
-    # UPDATED: Incomplete Listings Section with new criteria
+    # UPDATED: Incomplete Listings Section with new criteria and FIXED sorting
     st.markdown("---")
     st.subheader("❌ Incomplete Listings")
     
@@ -1015,8 +1165,14 @@ def show_plots_manager():
         
         incomplete_df = pd.DataFrame(incomplete_listings)
         
-        # Sort incomplete listings
-        incomplete_df = sort_dataframe_with_i15_street_no(incomplete_df)
+        # FIXED: Sort incomplete listings by Extracted Name to group same names together
+        if not incomplete_df.empty:
+            # First sort by Extracted Name to group same names together
+            incomplete_df["Extracted Name"] = incomplete_df["Extracted Name"].fillna("")
+            incomplete_df = incomplete_df.sort_values(by="Extracted Name")
+            
+            # Then apply the regular sorting for consistency within each name group
+            incomplete_df = sort_dataframe_with_i15_street_no(incomplete_df)
         
         if not incomplete_df.empty:
             st.info(f"Found {len(incomplete_df)} listings with missing information")
@@ -1035,6 +1191,13 @@ def show_plots_manager():
     if not df_filtered.empty:
         # Use the updated duplicate detection with new criteria
         styled_duplicates_df, duplicates_df = create_duplicates_view_updated(df_filtered)
+        
+        # FIXED: Apply Missing Contact filter to duplicates
+        if not st.session_state.missing_contact_filter and not duplicates_df.empty:
+            duplicates_df = duplicates_df[
+                ~(duplicates_df["Extracted Contact"].isna() | (duplicates_df["Extracted Contact"] == "")) | 
+                ~(duplicates_df["Extracted Name"].isna() | (duplicates_df["Extracted Name"] == ""))
+            ]
         
         if duplicates_df.empty:
             st.info("No duplicate listings found")
