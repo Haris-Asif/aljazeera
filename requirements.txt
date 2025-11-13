@@ -8,3 +8,4 @@ plotly
 vobject
 chardet
 google-api-python-client
+reportlab
