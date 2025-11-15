@@ -303,26 +303,26 @@ def display_table_with_actions(df, table_name, height=300, show_hold_button=True
         with col1:
             select_all = st.checkbox(f"Select All {table_name} Rows", key=f"select_all_{table_name}")
         with col2:
-            edit_btn = st.button("✏️ Edit Selected", use_container_width=True, key=f"edit_{table_name}")
+            edit_btn = st.button("✏️ Edit Selected", width='stretch', key=f"edit_{table_name}")
         with col3:
-            mark_sold_btn = st.button("✅ Mark as Sold", use_container_width=True, key=f"mark_sold_{table_name}")
+            mark_sold_btn = st.button("✅ Mark as Sold", width='stretch', key=f"mark_sold_{table_name}")
         with col4:
-            hold_btn = st.button("⏸️ Hold", use_container_width=True, key=f"hold_{table_name}")
+            hold_btn = st.button("⏸️ Hold", width='stretch', key=f"hold_{table_name}")
         with col5:
-            delete_btn = st.button("🗑️ Delete Selected", type="primary", key=f"delete_{table_name}")
+            delete_btn = st.button("🗑️ Delete Selected", type="primary", width='stretch', key=f"delete_{table_name}")
     else:
         # For Hold table, show Move To Available Data button instead of Hold button
         col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
         with col1:
             select_all = st.checkbox(f"Select All {table_name} Rows", key=f"select_all_{table_name}")
         with col2:
-            edit_btn = st.button("✏️ Edit Selected", use_container_width=True, key=f"edit_{table_name}")
+            edit_btn = st.button("✏️ Edit Selected", width='stretch', key=f"edit_{table_name}")
         with col3:
-            mark_sold_btn = st.button("✅ Mark as Sold", use_container_width=True, key=f"mark_sold_{table_name}")
+            mark_sold_btn = st.button("✅ Mark as Sold", width='stretch', key=f"mark_sold_{table_name}")
         with col4:
-            move_to_available_btn = st.button("🔄 Move To Available", use_container_width=True, key=f"move_available_{table_name}")
+            move_to_available_btn = st.button("🔄 Move To Available", width='stretch', key=f"move_available_{table_name}")
         with col5:
-            delete_btn = st.button("🗑️ Delete Selected", type="primary", key=f"delete_{table_name}")
+            delete_btn = st.button("🗑️ Delete Selected", type="primary", width='stretch', key=f"delete_{table_name}")
     
     # Handle select all functionality
     if select_all:
@@ -670,7 +670,7 @@ def show_plots_manager():
 
         # NEW: Download PDF button for dealer contacts
         if dealer_names and contact_to_name:
-            if st.button("📄 Download Dealer Contacts PDF", use_container_width=True):
+            if st.button("📄 Download Dealer Contacts PDF", width='stretch'):
                 pdf_data = generate_dealer_contacts_pdf(dealer_names, contact_to_name, contacts_df)
                 if pdf_data:
                     st.download_button(
@@ -678,7 +678,7 @@ def show_plots_manager():
                         data=pdf_data,
                         file_name="dealer_contacts.pdf",
                         mime="application/pdf",
-                        use_container_width=True
+                        width='stretch'
                     )
 
         contact_names = [""] + sorted(contacts_df["Name"].dropna().unique()) if not contacts_df.empty else [""]
@@ -706,7 +706,7 @@ def show_plots_manager():
             st.rerun()
         
         # Reset Filters Button
-        if st.button("🔄 Reset All Filters", use_container_width=True, key="reset_filters_btn"):
+        if st.button("🔄 Reset All Filters", width='stretch', key="reset_filters_btn"):
             # Reset all filter session states
             st.session_state.sector_filter = ""
             st.session_state.plot_size_filter = ""
