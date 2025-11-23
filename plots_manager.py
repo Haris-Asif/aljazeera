@@ -178,7 +178,7 @@ def create_dealer_specific_duplicates_view(df, dealer_contacts):
         return None, duplicates_df
 
 def get_todays_unique_listings(df):
-    """Get listings with new combinations of Sector, Plot No, Street No, Plot Size added today"""
+    """Get listings with new combinations of Sector & Plot No added today"""
     if df.empty:
         return pd.DataFrame()
     
@@ -198,14 +198,14 @@ def get_todays_unique_listings(df):
     before_today_listings['Date'] = pd.to_datetime(before_today_listings['Timestamp']).dt.date
     before_today_listings = before_today_listings[before_today_listings['Date'] < today]
     
-    # Create normalized key combinations for comparison (only Sector, Plot No, Street No, Plot Size)
+    # Create normalized key combinations for comparison (only Sector & Plot No)
     today_listings["CombinationKey"] = today_listings.apply(
-        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}|{str(row.get('Street No', '')).strip().upper()}|{str(row.get('Plot Size', '')).strip().upper()}", 
+        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
         axis=1
     )
     
     before_today_listings["CombinationKey"] = before_today_listings.apply(
-        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}|{str(row.get('Street No', '')).strip().upper()}|{str(row.get('Plot Size', '')).strip().upper()}", 
+        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
         axis=1
     )
     
@@ -221,7 +221,7 @@ def get_todays_unique_listings(df):
     return unique_today_listings
 
 def get_this_weeks_unique_listings(df):
-    """Get listings with new combinations of Sector, Plot No, Street No, Plot Size added in the last 7 days"""
+    """Get listings with new combinations of Sector & Plot No added in the last 7 days"""
     if df.empty:
         return pd.DataFrame()
     
@@ -242,14 +242,14 @@ def get_this_weeks_unique_listings(df):
     before_week_listings['Date'] = pd.to_datetime(before_week_listings['Timestamp']).dt.date
     before_week_listings = before_week_listings[before_week_listings['Date'] < week_ago]
     
-    # Create normalized key combinations for comparison (only Sector, Plot No, Street No, Plot Size)
+    # Create normalized key combinations for comparison (only Sector & Plot No)
     this_week_listings["CombinationKey"] = this_week_listings.apply(
-        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}|{str(row.get('Street No', '')).strip().upper()}|{str(row.get('Plot Size', '')).strip().upper()}", 
+        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
         axis=1
     )
     
     before_week_listings["CombinationKey"] = before_week_listings.apply(
-        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}|{str(row.get('Street No', '')).strip().upper()}|{str(row.get('Plot Size', '')).strip().upper()}", 
+        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
         axis=1
     )
     
@@ -524,22 +524,29 @@ def show_plots_manager():
         
         # Use session state to persist filter values
         if 'sector_filter' not in st.session_state or st.session_state.filters_reset:
-            st.session_state.sector_filter = ""
+            st.session_state.sector_filter = []
         
-        # Sector filter with on_change to trigger rerun
-        sector_filter = st.text_input(
+        # Get all unique sectors from the entire dataset
+        all_sectors = sorted([s for s in df["Sector"].dropna().unique() if s != ""])
+        
+        # Sector filter as multiselect dropdown
+        sector_filter = st.multiselect(
             "Sector", 
-            value=st.session_state.sector_filter, 
-            key="sector_filter_input",
-            on_change=lambda: None  # This helps trigger updates
+            options=all_sectors,
+            default=st.session_state.sector_filter,
+            key="sector_filter_input"
         )
         current_filters['sector_filter'] = sector_filter
         
+        # Get all unique plot sizes from the entire dataset
+        all_plot_sizes = sorted([s for s in df["Plot Size"].dropna().unique() if s != ""])
+        
         if 'plot_size_filter' not in st.session_state or st.session_state.filters_reset:
-            st.session_state.plot_size_filter = ""
-        plot_size_filter = st.text_input(
+            st.session_state.plot_size_filter = []
+        plot_size_filter = st.multiselect(
             "Plot Size", 
-            value=st.session_state.plot_size_filter, 
+            options=all_plot_sizes,
+            default=st.session_state.plot_size_filter,
             key="plot_size_filter_input"
         )
         current_filters['plot_size_filter'] = plot_size_filter
@@ -708,8 +715,8 @@ def show_plots_manager():
         # Reset Filters Button
         if st.button("🔄 Reset All Filters", width='stretch', key="reset_filters_btn"):
             # Reset all filter session states
-            st.session_state.sector_filter = ""
-            st.session_state.plot_size_filter = ""
+            st.session_state.sector_filter = []
+            st.session_state.plot_size_filter = []
             st.session_state.street_filter = ""
             st.session_state.plot_no_filter = ""
             st.session_state.contact_filter = ""
@@ -784,10 +791,13 @@ def show_plots_manager():
         df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(
             lambda x: any(n in clean_number(str(x)) for n in selected_contacts))]
 
+    # Apply Sector filter with multiselect
     if st.session_state.sector_filter:
-        df_filtered = df_filtered[df_filtered["Sector"].apply(lambda x: sector_matches(st.session_state.sector_filter, str(x)))]
+        df_filtered = df_filtered[df_filtered["Sector"].isin(st.session_state.sector_filter)]
+    
+    # Apply Plot Size filter with multiselect
     if st.session_state.plot_size_filter:
-        df_filtered = df_filtered[df_filtered["Plot Size"].str.contains(st.session_state.plot_size_filter, case=False, na=False)]
+        df_filtered = df_filtered[df_filtered["Plot Size"].isin(st.session_state.plot_size_filter)]
     
     # Enhanced Street No filter - match exact or partial matches
     if st.session_state.street_filter:
@@ -868,6 +878,17 @@ def show_plots_manager():
 
     st.subheader("📋 Filtered Listings")
     
+    # NEW: CSV Download Button for Filtered Listings
+    if not display_main_table.empty:
+        csv_data = display_main_table.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Filtered Listings as CSV",
+            data=csv_data,
+            file_name=f"filtered_listings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            key="download_csv"
+        )
+    
     # Count WhatsApp eligible listings (using the updated logic)
     whatsapp_eligible_count = 0
     for _, row in df_filtered.iterrows():
@@ -915,11 +936,13 @@ def show_plots_manager():
         hold_df_filtered = hold_df_filtered[hold_df_filtered["Extracted Contact"].apply(
             lambda x: any(c in clean_number(str(x)) for c in selected_contacts))]
     
+    # Apply Sector filter with multiselect to hold listings
     if st.session_state.sector_filter:
-        hold_df_filtered = hold_df_filtered[hold_df_filtered["Sector"].apply(lambda x: sector_matches(st.session_state.sector_filter, str(x)))]
+        hold_df_filtered = hold_df_filtered[hold_df_filtered["Sector"].isin(st.session_state.sector_filter)]
     
+    # Apply Plot Size filter with multiselect to hold listings
     if st.session_state.plot_size_filter:
-        hold_df_filtered = hold_df_filtered[hold_df_filtered["Plot Size"].str.contains(st.session_state.plot_size_filter, case=False, na=False)]
+        hold_df_filtered = hold_df_filtered[hold_df_filtered["Plot Size"].isin(st.session_state.plot_size_filter)]
     
     if st.session_state.street_filter:
         street_pattern = re.compile(re.escape(st.session_state.street_filter), re.IGNORECASE)
@@ -965,8 +988,9 @@ def show_plots_manager():
             todays_unique_filtered = todays_unique_filtered[todays_unique_filtered["Extracted Contact"].apply(
                 lambda x: any(c in clean_number(str(x)) for c in selected_contacts))]
         
+        # Apply Sector filter with multiselect to today's unique listings
         if st.session_state.sector_filter:
-            todays_unique_filtered = todays_unique_filtered[todays_unique_filtered["Sector"].apply(lambda x: sector_matches(st.session_state.sector_filter, str(x)))]
+            todays_unique_filtered = todays_unique_filtered[todays_unique_filtered["Sector"].isin(st.session_state.sector_filter)]
         
         # FIXED: Apply Missing Contact filter to today's unique listings
         if not st.session_state.missing_contact_filter:
@@ -978,7 +1002,7 @@ def show_plots_manager():
         # Sort and display
         todays_unique_filtered = sort_dataframe_with_i15_street_no(todays_unique_filtered)
         
-        st.info(f"Found {len(todays_unique_filtered)} unique listings added today with new Sector/Plot No/Street No/Plot Size combinations")
+        st.info(f"Found {len(todays_unique_filtered)} unique listings added today with new Sector & Plot No combinations")
         
         # Display with actions
         display_table_with_actions(todays_unique_filtered, "Today_Unique", height=300, show_hold_button=True)
@@ -1003,8 +1027,9 @@ def show_plots_manager():
             weeks_unique_filtered = weeks_unique_filtered[weeks_unique_filtered["Extracted Contact"].apply(
                 lambda x: any(c in clean_number(str(x)) for c in selected_contacts))]
         
+        # Apply Sector filter with multiselect to this week's unique listings
         if st.session_state.sector_filter:
-            weeks_unique_filtered = weeks_unique_filtered[weeks_unique_filtered["Sector"].apply(lambda x: sector_matches(st.session_state.sector_filter, str(x)))]
+            weeks_unique_filtered = weeks_unique_filtered[weeks_unique_filtered["Sector"].isin(st.session_state.sector_filter)]
         
         # FIXED: Apply Missing Contact filter to this week's unique listings
         if not st.session_state.missing_contact_filter:
@@ -1016,7 +1041,7 @@ def show_plots_manager():
         # Sort and display
         weeks_unique_filtered = sort_dataframe_with_i15_street_no(weeks_unique_filtered)
         
-        st.info(f"Found {len(weeks_unique_filtered)} unique listings added in the last 7 days with new Sector/Plot No/Street No/Plot Size combinations")
+        st.info(f"Found {len(weeks_unique_filtered)} unique listings added in the last 7 days with new Sector & Plot No combinations")
         
         # Display with actions
         display_table_with_actions(weeks_unique_filtered, "Week_Unique", height=300, show_hold_button=True)
@@ -1086,10 +1111,10 @@ def show_plots_manager():
     
     # Apply the same filters to sold data with safety checks
     if st.session_state.sector_filter and "Sector" in sold_df_filtered.columns:
-        sold_df_filtered = sold_df_filtered[sold_df_filtered["Sector"].str.contains(st.session_state.sector_filter, case=False, na=False)]
+        sold_df_filtered = sold_df_filtered[sold_df_filtered["Sector"].isin(st.session_state.sector_filter)]
     
     if st.session_state.plot_size_filter and "Plot Size" in sold_df_filtered.columns:
-        sold_df_filtered = sold_df_filtered[sold_df_filtered["Plot Size"].str.contains(st.session_state.plot_size_filter, case=False, na=False)]
+        sold_df_filtered = sold_df_filtered[sold_df_filtered["Plot Size"].isin(st.session_state.plot_size_filter)]
     
     if st.session_state.street_filter and "Street No" in sold_df_filtered.columns:
         sold_df_filtered = sold_df_filtered[sold_df_filtered["Street No"].str.contains(st.session_state.street_filter, case=False, na=False)]
