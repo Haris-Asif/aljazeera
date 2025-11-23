@@ -46,11 +46,23 @@ def get_dynamic_dealer_names(df, filters):
     df_temp = df.copy()
     
     # Apply all current filters except dealer filter
+    # FIXED: Handle sector filter for both list (multi-select) and string (legacy)
     if filters.get('sector_filter'):
-        df_temp = df_temp[df_temp["Sector"].apply(lambda x: sector_matches(filters['sector_filter'], str(x)))]
+        sector_filter = filters['sector_filter']
+        if isinstance(sector_filter, list) and sector_filter:
+            # Multi-select: use exact matching
+            df_temp = df_temp[df_temp["Sector"].isin(sector_filter)]
+        elif sector_filter:  # String case
+            df_temp = df_temp[df_temp["Sector"].apply(lambda x: sector_matches(sector_filter, str(x)))]
     
+    # FIXED: Handle plot_size filter for both list and string
     if filters.get('plot_size_filter'):
-        df_temp = df_temp[df_temp["Plot Size"].str.contains(filters['plot_size_filter'], case=False, na=False)]
+        plot_size_filter = filters['plot_size_filter']
+        if isinstance(plot_size_filter, list) and plot_size_filter:
+            # Multi-select: use exact matching
+            df_temp = df_temp[df_temp["Plot Size"].isin(plot_size_filter)]
+        elif plot_size_filter:  # String case
+            df_temp = df_temp[df_temp["Plot Size"].str.contains(plot_size_filter, case=False, na=False)]
     
     if filters.get('street_filter'):
         street_pattern = re.compile(re.escape(filters['street_filter']), re.IGNORECASE)
@@ -527,7 +539,7 @@ def show_plots_manager():
             st.session_state.sector_filter = []
         
         # Get all unique sectors from the entire dataset
-        all_sectors = sorted([s for s in df["Sector"].dropna().unique() if s != ""])
+        all_sectors = sorted([str(s) for s in df["Sector"].dropna().unique() if s and str(s).strip() != ""])
         
         # Sector filter as multiselect dropdown
         sector_filter = st.multiselect(
@@ -539,7 +551,7 @@ def show_plots_manager():
         current_filters['sector_filter'] = sector_filter
         
         # Get all unique plot sizes from the entire dataset
-        all_plot_sizes = sorted([s for s in df["Plot Size"].dropna().unique() if s != ""])
+        all_plot_sizes = sorted([str(s) for s in df["Plot Size"].dropna().unique() if s and str(s).strip() != ""])
         
         if 'plot_size_filter' not in st.session_state or st.session_state.filters_reset:
             st.session_state.plot_size_filter = []
@@ -630,14 +642,14 @@ def show_plots_manager():
         # Property Type filter
         prop_type_options = ["All"]
         if "Property Type" in df.columns:
-            prop_type_options += sorted([str(v).strip() for v in df["Property Type"].dropna().astype(str).unique()])
+            prop_type_options += sorted([str(v).strip() for v in df["Property Type"].dropna().astype(str).unique() if v and str(v).strip() != ""])
         
         if 'selected_prop_type' not in st.session_state or st.session_state.filters_reset:
             st.session_state.selected_prop_type = "All"
         selected_prop_type = st.selectbox(
             "Property Type", 
             prop_type_options, 
-            index=prop_type_options.index(st.session_state.selected_prop_type), 
+            index=prop_type_options.index(st.session_state.selected_prop_type) if st.session_state.selected_prop_type in prop_type_options else 0, 
             key="prop_type_input"
         )
         current_filters['selected_prop_type'] = selected_prop_type
@@ -1277,7 +1289,7 @@ def show_plots_manager():
             if contact_row is not None:
                 numbers = []
                 for col in ["Contact1", "Contact2", "Contact3"]:
-                    if col in contact_row and pd.notna(contact_row[col]):
+                    if col in contact_row and pd.notna(row[col]):
                         numbers.append(clean_number(contact_row[col]))
                 cleaned = numbers[0] if numbers else ""
 
