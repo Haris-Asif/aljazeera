@@ -173,12 +173,26 @@ def main():
     # Initialize session state for tab management
     if "active_tab" not in st.session_state:
         st.session_state.active_tab = "Dashboard"
+        
+    # --- FIX: URL Persistence Logic ---
+    # Check query params on load to persist tab across reloads
+    try:
+        # For Streamlit 1.30+
+        if "tab" in st.query_params:
+            query_tab = st.query_params["tab"]
+            if query_tab in ["Dashboard", "Plots", "Contacts", "Leads Management", "Closed Deals"]:
+                if st.session_state.active_tab != query_tab:
+                    st.session_state.active_tab = query_tab
+    except:
+        # Fallback for older Streamlit versions if needed
+        pass
+    
     if "selected_contact" not in st.session_state:
         st.session_state.selected_contact = None
     if "crm_subtab" not in st.session_state:
         st.session_state.crm_subtab = None
     
-    # Create sidebar navigation - FIXED: Removed duplicate names
+    # Create sidebar navigation
     with st.sidebar:
         st.markdown("""
         <div style='text-align: center; margin-bottom: 2rem;'>
@@ -187,7 +201,7 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
-        # Sidebar menu with icons - FIXED: Only show icon + name once
+        # Sidebar menu with icons
         menu_options = [
             ("📊", "Dashboard"),
             ("🏠", "Plots"), 
@@ -197,6 +211,7 @@ def main():
         ]
         
         for icon, tab_name in menu_options:
+            # Use type="primary" for the active tab to highlight it
             if st.button(
                 f"{icon} {tab_name}", 
                 key=f"btn_{tab_name}",
@@ -204,14 +219,15 @@ def main():
                 type="primary" if st.session_state.active_tab == tab_name else "secondary"
             ):
                 st.session_state.active_tab = tab_name
+                # Update query param
+                st.query_params["tab"] = tab_name
                 st.rerun()
         
         # Add some spacing and info
         st.markdown("---")
         st.markdown("""
         <div style='text-align: center; color: #d4af37; font-size: 0.8rem;'>
-            <p>Al-Jazeera Real Estate Tool</p>
-            <p>v2.0 • Premium Edition</p>
+            <p>Al-Jazeera Real Estate Tool</p>\n            <p>v2.0 • Premium Edition</p>
         </div>
         """, unsafe_allow_html=True)
     
