@@ -934,42 +934,45 @@ def show_plots_manager():
     else:
         st.info("No listings match your filters")
     
-    # NEW: Listings on Hold Section
+    # NEW: Listings on Hold Section - FIXED: Added column existence checks
     st.markdown("---")
     st.subheader("⏸️ Listings on Hold")
     
     # Apply the same filters to hold listings
     hold_df_filtered = hold_df.copy()
     
-    # Apply the same filters that were applied to the main table
-    if st.session_state.selected_dealer:
+    # Apply the same filters that were applied to the main table with safety checks
+    if st.session_state.selected_dealer and "Extracted Contact" in hold_df_filtered.columns:
         actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
         selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
         hold_df_filtered = hold_df_filtered[hold_df_filtered["Extracted Contact"].apply(
             lambda x: any(c in clean_number(str(x)) for c in selected_contacts))]
     
-    # Apply Sector filter with multiselect to hold listings
-    if st.session_state.sector_filter:
+    # Apply Sector filter with multiselect to hold listings - FIXED: Check column exists
+    if st.session_state.sector_filter and "Sector" in hold_df_filtered.columns:
         hold_df_filtered = hold_df_filtered[hold_df_filtered["Sector"].isin(st.session_state.sector_filter)]
     
-    # Apply Plot Size filter with multiselect to hold listings
-    if st.session_state.plot_size_filter:
+    # Apply Plot Size filter with multiselect to hold listings - FIXED: Check column exists
+    if st.session_state.plot_size_filter and "Plot Size" in hold_df_filtered.columns:
         hold_df_filtered = hold_df_filtered[hold_df_filtered["Plot Size"].isin(st.session_state.plot_size_filter)]
     
-    if st.session_state.street_filter:
+    # FIXED: Check if Street No column exists before filtering
+    if st.session_state.street_filter and "Street No" in hold_df_filtered.columns:
         street_pattern = re.compile(re.escape(st.session_state.street_filter), re.IGNORECASE)
         hold_df_filtered = hold_df_filtered[hold_df_filtered["Street No"].apply(lambda x: bool(street_pattern.search(str(x))))]
     
-    if st.session_state.plot_no_filter:
+    # FIXED: Check if Plot No column exists before filtering
+    if st.session_state.plot_no_filter and "Plot No" in hold_df_filtered.columns:
         plot_pattern = re.compile(re.escape(st.session_state.plot_no_filter), re.IGNORECASE)
         hold_df_filtered = hold_df_filtered[hold_df_filtered["Plot No"].apply(lambda x: bool(plot_pattern.search(str(x))))]
     
-    # FIXED: Apply Missing Contact filter to hold listings
+    # FIXED: Apply Missing Contact filter to hold listings with column checks
     if not st.session_state.missing_contact_filter:
-        hold_df_filtered = hold_df_filtered[
-            ~(hold_df_filtered["Extracted Contact"].isna() | (hold_df_filtered["Extracted Contact"] == "")) | 
-            ~(hold_df_filtered["Extracted Name"].isna() | (hold_df_filtered["Extracted Name"] == ""))
-        ]
+        if "Extracted Contact" in hold_df_filtered.columns and "Extracted Name" in hold_df_filtered.columns:
+            hold_df_filtered = hold_df_filtered[
+                ~(hold_df_filtered["Extracted Contact"].isna() | (hold_df_filtered["Extracted Contact"] == "")) | 
+                ~(hold_df_filtered["Extracted Name"].isna() | (hold_df_filtered["Extracted Name"] == ""))
+            ]
     
     # Sort hold listings
     hold_df_filtered = sort_dataframe_with_i15_street_no(hold_df_filtered)
@@ -1114,7 +1117,7 @@ def show_plots_manager():
         else:
             st.info(f"No dealer-specific duplicates found for **{actual_name}**")
     
-    # NEW: Sold Listings Table in Plots Section
+    # NEW: Sold Listings Table in Plots Section - FIXED: Added column existence checks
     st.markdown("---")
     st.subheader("✅ Sold Listings (Filtered)")
     
@@ -1138,7 +1141,7 @@ def show_plots_manager():
     if "Property Type" in sold_df_filtered.columns and st.session_state.selected_prop_type and st.session_state.selected_prop_type != "All":
         sold_df_filtered = sold_df_filtered[sold_df_filtered["Property Type"].astype(str).str.strip() == st.session_state.selected_prop_type]
     
-    # FIXED: Apply Missing Contact filter to sold listings
+    # FIXED: Apply Missing Contact filter to sold listings with column checks
     if not st.session_state.missing_contact_filter:
         if "Extracted Contact" in sold_df_filtered.columns and "Extracted Name" in sold_df_filtered.columns:
             sold_df_filtered = sold_df_filtered[
@@ -1289,7 +1292,7 @@ def show_plots_manager():
             if contact_row is not None:
                 numbers = []
                 for col in ["Contact1", "Contact2", "Contact3"]:
-                    if col in contact_row and pd.notna(row[col]):
+                    if col in contact_row and pd.notna(contact_row[col]):
                         numbers.append(clean_number(contact_row[col]))
                 cleaned = numbers[0] if numbers else ""
 
