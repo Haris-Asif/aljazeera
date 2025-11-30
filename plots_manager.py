@@ -355,7 +355,10 @@ def display_table_with_actions(df, table_name, height=300, show_hold_button=True
             success = delete_rows_from_sheet(row_nums)
             if success:
                 st.success(f"✅ Successfully deleted {len(row_nums)} row(s) from {table_name}!")
+                # Clear cache and reset filters to prevent stale data issues
                 st.cache_data.clear()
+                # Reset filter session state to prevent multiselect errors
+                reset_filter_session_state_after_deletion()
                 st.rerun()
             else:
                 st.error("❌ Failed to delete rows. Please try again.")
@@ -430,6 +433,26 @@ def generate_dealer_contacts_pdf(dealer_names, contact_to_name, contacts_df):
         st.error(f"Error generating PDF: {str(e)}")
         return None
 
+def reset_filter_session_state_after_deletion():
+    """Reset filter session state after deletion to prevent multiselect errors"""
+    # Reset multiselect filters to only include values that still exist
+    df = load_plot_data().fillna("")
+    
+    # Update sector filter
+    if 'sector_filter' in st.session_state:
+        all_sectors = sorted([str(s) for s in df["Sector"].dropna().unique() if s and str(s).strip() != ""])
+        st.session_state.sector_filter = [s for s in st.session_state.sector_filter if s in all_sectors]
+    
+    # Update plot size filter
+    if 'plot_size_filter' in st.session_state:
+        all_plot_sizes = sorted([str(s) for s in df["Plot Size"].dropna().unique() if s and str(s).strip() != ""])
+        st.session_state.plot_size_filter = [s for s in st.session_state.plot_size_filter if s in all_plot_sizes]
+    
+    # Update features filter
+    if 'selected_features' in st.session_state:
+        all_features = get_all_unique_features(df)
+        st.session_state.selected_features = [f for f in st.session_state.selected_features if f in all_features]
+
 def show_plots_manager():
     st.header("🏠 Plots Management")
     
@@ -464,11 +487,24 @@ def show_plots_manager():
         </div>
         """, unsafe_allow_html=True)
         
+        # Get current available options
+        all_sectors = sorted([str(s) for s in df["Sector"].dropna().unique() if s and str(s).strip() != ""])
+        all_plot_sizes = sorted([str(s) for s in df["Plot Size"].dropna().unique() if s and str(s).strip() != ""])
+        
+        # Initialize or fix session state for multiselect filters
         if 'sector_filter' not in st.session_state or st.session_state.filters_reset:
             st.session_state.sector_filter = []
+        else:
+            # Ensure session state only contains valid sectors
+            st.session_state.sector_filter = [s for s in st.session_state.sector_filter if s in all_sectors]
         
-        all_sectors = sorted([str(s) for s in df["Sector"].dropna().unique() if s and str(s).strip() != ""])
+        if 'plot_size_filter' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.plot_size_filter = []
+        else:
+            # Ensure session state only contains valid plot sizes
+            st.session_state.plot_size_filter = [s for s in st.session_state.plot_size_filter if s in all_plot_sizes]
         
+        # Sector filter with safe defaults
         sector_filter = st.multiselect(
             "Sector", 
             options=all_sectors,
@@ -477,10 +513,7 @@ def show_plots_manager():
         )
         current_filters['sector_filter'] = sector_filter
         
-        all_plot_sizes = sorted([str(s) for s in df["Plot Size"].dropna().unique() if s and str(s).strip() != ""])
-        
-        if 'plot_size_filter' not in st.session_state or st.session_state.filters_reset:
-            st.session_state.plot_size_filter = []
+        # Plot size filter with safe defaults
         plot_size_filter = st.multiselect(
             "Plot Size", 
             options=all_plot_sizes,
@@ -521,6 +554,10 @@ def show_plots_manager():
         
         if 'selected_features' not in st.session_state or st.session_state.filters_reset:
             st.session_state.selected_features = []
+        else:
+            # Ensure session state only contains valid features
+            st.session_state.selected_features = [f for f in st.session_state.selected_features if f in all_features]
+            
         selected_features = st.multiselect("Select Feature(s)", options=all_features, default=st.session_state.selected_features, key="features_input")
         current_filters['selected_features'] = selected_features
         
@@ -1162,6 +1199,8 @@ def mark_listings_sold(rows_data):
             if delete_rows_from_sheet(row_nums):
                 st.success(f"✅ Successfully marked {len(rows_data)} listing(s) as sold and moved to Sold sheet!")
                 st.cache_data.clear()
+                # Reset filter session state to prevent multiselect errors
+                reset_filter_session_state_after_deletion()
                 st.rerun()
             else:
                 st.error("❌ Failed to remove listings from plots sheet.")
@@ -1199,6 +1238,8 @@ def move_listings_to_hold(rows_data, source_table):
             if move_to_hold(row_nums):
                 st.success(f"✅ Successfully moved {len(rows_data)} listing(s) to Hold!")
                 st.cache_data.clear()
+                # Reset filter session state to prevent multiselect errors
+                reset_filter_session_state_after_deletion()
                 st.rerun()
             else:
                 st.error("❌ Failed to remove listings from original sheet.")
@@ -1234,6 +1275,8 @@ def move_listings_to_plots(rows_data):
             if move_to_plots(row_nums):
                 st.success(f"✅ Successfully moved {len(rows_data)} listing(s) back to Available Plots!")
                 st.cache_data.clear()
+                # Reset filter session state to prevent multiselect errors
+                reset_filter_session_state_after_deletion()
                 st.rerun()
             else:
                 st.error("❌ Failed to remove listings from hold sheet.")
