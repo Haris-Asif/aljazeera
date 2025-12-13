@@ -265,7 +265,7 @@ def safe_display_dataframe(df, height=300):
         return
     try:
         safe_df = safe_dataframe_for_display(df)
-        st.dataframe(safe_df, use_container_width=True, height=height)
+        st.dataframe(safe_df, width='stretch', height=height)
     except Exception as e:
         st.error(f"Could not display dataframe: {str(e)}")
         st.table(df.head(50))
@@ -543,12 +543,6 @@ def apply_dealer_filter(df, selected_dealer_groups, dealer_groups_info):
     if not selected_dealer_groups or not dealer_groups_info:
         return df
     
-    # Extract base dealer names from the selected groups (remove count part)
-    selected_base_names = []
-    for dealer_display in selected_dealer_groups:
-        base_name = re.sub(r'\s*\(\d+\s*listings\)$', '', dealer_display)
-        selected_base_names.append(base_name)
-    
     # Create a list to store all conditions
     all_conditions = []
     
@@ -565,7 +559,8 @@ def apply_dealer_filter(df, selected_dealer_groups, dealer_groups_info):
             if values.get("Extracted Name"):
                 extracted_name = str(values["Extracted Name"]).strip()
                 if extracted_name:
-                    conditions.append(df["Extracted Name"].fillna("").astype(str).str.contains(extracted_name, case=False, na=False))
+                    # Exact match for Extracted Name
+                    conditions.append(df["Extracted Name"].fillna("").astype(str).str.strip() == extracted_name)
             
             # Check Extracted Contact
             if values.get("Extracted Contact"):
@@ -574,17 +569,21 @@ def apply_dealer_filter(df, selected_dealer_groups, dealer_groups_info):
                     # Clean the contact for comparison
                     cleaned_extracted = clean_number(extracted_contact)
                     if cleaned_extracted:
-                        conditions.append(
-                            df["Extracted Contact"].fillna("").astype(str).apply(
-                                lambda x: any(cleaned_extracted == clean_number(p) for p in str(x).split(","))
-                            )
-                        )
+                        # Check if cleaned_extracted appears in the Extracted Contact column
+                        def check_extracted_contact(row_contact):
+                            if pd.isna(row_contact) or row_contact == "":
+                                return False
+                            row_contacts = str(row_contact).split(",")
+                            return any(cleaned_extracted == clean_number(c.strip()) for c in row_contacts)
+                        
+                        conditions.append(df["Extracted Contact"].apply(check_extracted_contact))
             
             # Check Sender Name
             if values.get("Sender Name") and "Sender Name" in df.columns:
                 sender_name = str(values["Sender Name"]).strip()
                 if sender_name:
-                    conditions.append(df["Sender Name"].fillna("").astype(str).str.contains(sender_name, case=False, na=False))
+                    # Exact match for Sender Name
+                    conditions.append(df["Sender Name"].fillna("").astype(str).str.strip() == sender_name)
             
             # Check Sender Number
             if values.get("Sender Number") and "Sender Number" in df.columns:
@@ -593,20 +592,22 @@ def apply_dealer_filter(df, selected_dealer_groups, dealer_groups_info):
                     # Clean the sender number for comparison
                     cleaned_sender = clean_number(sender_number)
                     if cleaned_sender:
-                        conditions.append(
-                            df["Sender Number"].fillna("").astype(str).apply(
-                                lambda x: cleaned_sender == clean_number(str(x))
-                            )
-                        )
+                        # Exact match for Sender Number
+                        def check_sender_number(row_number):
+                            if pd.isna(row_number) or row_number == "":
+                                return False
+                            return cleaned_sender == clean_number(str(row_number))
+                        
+                        conditions.append(df["Sender Number"].apply(check_sender_number))
             
-            # Combine conditions for this dealer group with OR
+            # Combine conditions for this dealer group with OR (any of the conditions can match)
             if conditions:
                 dealer_condition = conditions[0]
                 for condition in conditions[1:]:
                     dealer_condition = dealer_condition | condition
                 all_conditions.append(dealer_condition)
     
-    # Combine all dealer group conditions with OR
+    # Combine all dealer group conditions with OR (any selected dealer group can match)
     if all_conditions:
         final_condition = all_conditions[0]
         for condition in all_conditions[1:]:
@@ -853,12 +854,14 @@ def show_plots_manager():
                 if contact_info:
                     st.write(f"**{dealer_base_name}**: " + " | ".join(contact_info))
 
+    # Start with ALL data
     df_filtered = df.copy()
 
-    # Apply dealer filter if selected
+    # Apply dealer filter if selected - FIRST FILTER to be applied
     if st.session_state.selected_dealer:
         df_filtered = apply_dealer_filter(df_filtered, st.session_state.selected_dealer, dealer_groups_info)
 
+    # Apply saved contact filter
     if st.session_state.selected_saved:
         row = contacts_df[contacts_df["Name"] == st.session_state.selected_saved].iloc[0] if not contacts_df.empty and not contacts_df[contacts_df["Name"] == st.session_state.selected_saved].empty else None
         selected_contacts = []
@@ -866,8 +869,10 @@ def show_plots_manager():
             for col in ["Contact1", "Contact2", "Contact3"]:
                 if col in row and pd.notna(row[col]):
                     selected_contacts.extend(extract_numbers(str(row[col])))
-        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(lambda x: any(n in clean_number(str(x)) for n in selected_contacts))]
+        if selected_contacts:
+            df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(lambda x: any(n in clean_number(str(x)) for n in selected_contacts))]
 
+    # Apply other filters
     if st.session_state.sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].isin(st.session_state.sector_filter)]
     
@@ -1423,7 +1428,7 @@ def move_listings_to_hold(rows_data, source_table):
         
         for row_data in rows_data:
             new_hold_record = {
-                "Timestamp": datetime.now().strftime("%Y-%m-d %H:%M:%S"),
+                "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "Sector": row_data.get("Sector", ""),
                 "Plot No": row_data.get("Plot No", ""),
                 "Street No": row_data.get("Street No", ""),
