@@ -1508,7 +1508,7 @@ def show_edit_form(row_data, table_name):
                 row_num = int(row_data.get("SheetRowNum", 0)) - 2
                 if 0 <= row_num < len(hold_df):
                     for key, value in updated_row.items():
-                        if key in hold_df.columns and key != "SheetRowNum":A
+                        if key in hold_df.columns and key != "SheetRowNum":
                             hold_df.at[row_num, key] = value
                     if save_hold_data(hold_df):
                         st.success("✅ Hold listing updated successfully!")
