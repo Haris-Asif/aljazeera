@@ -10,7 +10,6 @@ from utils import (load_plot_data, load_contacts, delete_rows_from_sheet,
 from utils import fuzzy_feature_match
 from datetime import datetime, timedelta
 from io import BytesIO
-
 try:
     from reportlab.lib.pagesizes import letter
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
@@ -173,7 +172,9 @@ def create_dealer_specific_duplicates_view(df, dealer_contacts):
     )
     
     # --- PERFORMANCE FIX: Limit styling row count ---
+    # Attempting to style and render HTML for hundreds of rows crashes the app
     if len(duplicates_df) > 50:
+        # If too many rows, return just the dataframe, no styled object to prevent OOM
         return None, duplicates_df
 
     # Create styled version with color grouping
@@ -264,7 +265,7 @@ def safe_display_dataframe(df, height=300):
         return
     try:
         safe_df = safe_dataframe_for_display(df)
-        st.dataframe(safe_df, width='stretch', height=height)
+        st.dataframe(safe_df, use_container_width=True, height=height)
     except Exception as e:
         st.error(f"Could not display dataframe: {str(e)}")
         st.table(df.head(50))
@@ -452,140 +453,6 @@ def reset_filter_session_state_after_deletion():
         all_features = get_all_unique_features(df)
         st.session_state.selected_features = [f for f in st.session_state.selected_features if f in all_features]
 
-def get_dealer_groups(df):
-    """Create dealer groups based on unique combinations of Sender Number, Sender Name, Extracted Contact, Extracted Name"""
-    if df.empty:
-        return [], {}
-    
-    # Create a copy to avoid modifying original
-    df_copy = df.copy()
-    
-    # Clean and normalize the grouping columns
-    grouping_cols = ["Sender Number", "Sender Name", "Extracted Contact", "Extracted Name"]
-    
-    # Check which grouping columns exist in the dataframe
-    available_cols = [col for col in grouping_cols if col in df_copy.columns]
-    
-    if not available_cols:
-        return [], {}
-    
-    # Fill NaN with empty string and strip whitespace
-    for col in available_cols:
-        df_copy[col] = df_copy[col].fillna("").astype(str).str.strip()
-    
-    # Create a group key based on unique combination of available columns
-    def create_group_key(row):
-        parts = []
-        for col in available_cols:
-            parts.append(f"{col}={row[col]}")
-        return "|".join(parts)
-    
-    df_copy["GroupKey"] = df_copy.apply(create_group_key, axis=1)
-    
-    # Create groups
-    groups = {}
-    group_info = {}
-    
-    for group_key, group_df in df_copy.groupby("GroupKey"):
-        # Count listings in this group
-        count = len(group_df)
-        
-        # Get representative values for display
-        first_row = group_df.iloc[0]
-        
-        # Determine display name
-        display_name = ""
-        if "Extracted Name" in available_cols and first_row["Extracted Name"]:
-            display_name = first_row["Extracted Name"]
-        elif "Sender Name" in available_cols and first_row["Sender Name"]:
-            display_name = first_row["Sender Name"]
-        elif "Extracted Contact" in available_cols and first_row["Extracted Contact"]:
-            display_name = first_row["Extracted Contact"]
-        elif "Sender Number" in available_cols and first_row["Sender Number"]:
-            display_name = first_row["Sender Number"]
-        else:
-            display_name = "Unknown"
-        
-        # Handle duplicate names by appending numbers
-        base_name = display_name
-        counter = 1
-        final_name = base_name
-        
-        while final_name in groups:
-            final_name = f"{base_name}-{counter}"
-            counter += 1
-        
-        # Store group info
-        group_info[final_name] = {
-            "group_key": group_key,
-            "count": count,
-            "values": {
-                "Extracted Name": first_row.get("Extracted Name", ""),
-                "Extracted Contact": first_row.get("Extracted Contact", ""),
-                "Sender Name": first_row.get("Sender Name", ""),
-                "Sender Number": first_row.get("Sender Number", ""),
-            }
-        }
-        
-        # Store group with display name
-        groups[final_name] = group_key
-    
-    # Create dealer names list with count
-    dealer_names = []
-    for name, info in group_info.items():
-        dealer_names.append(f"{name} ({info['count']} listings)")
-    
-    return dealer_names, group_info
-
-def apply_dealer_filter(df, selected_dealer_groups, dealer_groups_info):
-    """Apply dealer filter to dataframe based on selected dealer groups using Exact Matching"""
-    if not selected_dealer_groups or not dealer_groups_info or df.empty:
-        return df
-    
-    # Identify the columns used for grouping (must match get_dealer_groups logic)
-    grouping_cols = ["Sender Number", "Sender Name", "Extracted Contact", "Extracted Name"]
-    available_cols = [col for col in grouping_cols if col in df.columns]
-    
-    if not available_cols:
-        return df
-
-    # Create a normalized temporary dataframe for comparison
-    # We must replicate the exact same normalization used in get_dealer_groups
-    df_norm = df.copy()
-    for col in available_cols:
-        df_norm[col] = df_norm[col].fillna("").astype(str).str.strip()
-    
-    # Initialize a mask for all rows (start with all False)
-    final_mask = pd.Series(False, index=df.index)
-    has_active_filter = False
-    
-    for dealer_display in selected_dealer_groups:
-        if dealer_display in dealer_groups_info:
-            group_info = dealer_groups_info[dealer_display]
-            values = group_info["values"]
-            
-            # Start with a mask of True for this specific dealer group
-            dealer_mask = pd.Series(True, index=df.index)
-            
-            # Iterate through available columns and enforce EXACT match
-            # This ensures we get exactly the rows that formed this group
-            for col in available_cols:
-                # Get the value that defined this group (default to empty string if missing in info)
-                target_val = str(values.get(col, "")).strip()
-                
-                # AND condition: The row must match this column's value
-                dealer_mask = dealer_mask & (df_norm[col] == target_val)
-            
-            # Combine this dealer's rows with the accumulated result using OR
-            final_mask = final_mask | dealer_mask
-            has_active_filter = True
-    
-    # If we successfully built a filter mask, apply it
-    if has_active_filter:
-        return df[final_mask]
-    
-    return df
-
 def show_plots_manager():
     st.header("🏠 Plots Management")
     
@@ -713,35 +580,23 @@ def show_plots_manager():
         missing_contact_filter = st.checkbox("Show listings with missing contact/name", value=st.session_state.missing_contact_filter, key="missing_contact_filter_input")
         current_filters['missing_contact_filter'] = missing_contact_filter
 
-        # Get dealer groups from ALL data (not filtered)
-        dealer_names, dealer_groups_info = get_dealer_groups(df)
+        dealer_names, contact_to_name = get_dynamic_dealer_names(df, current_filters)
         
         if 'selected_dealer' not in st.session_state or st.session_state.filters_reset:
-            st.session_state.selected_dealer = []
+            st.session_state.selected_dealer = ""
         
-        # Convert selected dealer to list for multiselect
-        selected_dealer_current = st.session_state.selected_dealer
-        if not isinstance(selected_dealer_current, list):
-            # Convert string to list if it's not already a list
-            selected_dealer_current = [selected_dealer_current] if selected_dealer_current else []
+        dealer_options = [""] + dealer_names
+        current_dealer = st.session_state.selected_dealer
+        if current_dealer not in dealer_options:
+            current_dealer = ""
+            st.session_state.selected_dealer = ""
         
-        # Filter out any dealers that no longer exist
-        selected_dealer_current = [d for d in selected_dealer_current if d in dealer_names]
-        
-        selected_dealer = st.multiselect(
-            f"Dealer Name (by contact) - {len(dealer_names)} groups found", 
-            options=dealer_names,
-            default=selected_dealer_current,
-            key="dealer_input"
-        )
+        selected_dealer = st.selectbox(f"Dealer Name (by contact) - {len(dealer_names)} found", dealer_options, index=dealer_options.index(current_dealer) if current_dealer in dealer_options else 0, key="dealer_input")
         current_filters['selected_dealer'] = selected_dealer
 
-        # Get contact_to_name mapping for backward compatibility with other parts of the code
-        dealer_names_old, contact_to_name = get_dynamic_dealer_names(df, current_filters)
-        
-        if dealer_names_old and contact_to_name:
+        if dealer_names and contact_to_name:
             if st.button("📄 Download Dealer Contacts PDF", width='stretch'):
-                pdf_data = generate_dealer_contacts_pdf(dealer_names_old, contact_to_name, contacts_df)
+                pdf_data = generate_dealer_contacts_pdf(dealer_names, contact_to_name, contacts_df)
                 if pdf_data:
                     st.download_button(label="⬇️ Download PDF Now", data=pdf_data, file_name="dealer_contacts.pdf", mime="application/pdf", width='stretch')
 
@@ -773,7 +628,7 @@ def show_plots_manager():
             st.session_state.date_filter = "All"
             st.session_state.selected_prop_type = "All"
             st.session_state.missing_contact_filter = False
-            st.session_state.selected_dealer = []
+            st.session_state.selected_dealer = ""
             st.session_state.selected_saved = ""
             st.session_state.filters_reset = True
             st.session_state.last_filter_state = {}
@@ -798,40 +653,26 @@ def show_plots_manager():
     if st.session_state.edit_mode and st.session_state.editing_row is not None:
         show_edit_form(st.session_state.editing_row, st.session_state.editing_table)
 
-    # Display dealer contact info if dealers are selected
     if st.session_state.selected_dealer:
-        st.info(f"**📞 Selected Dealers ({len(st.session_state.selected_dealer)}):**")
-        
-        for dealer_display in st.session_state.selected_dealer:
-            # Extract base dealer name (without count)
-            dealer_base_name = re.sub(r'\s*\(\d+\s*listings\)$', '', dealer_display)
-            
-            if dealer_display in dealer_groups_info:
-                group_info = dealer_groups_info[dealer_display]
-                values = group_info["values"]
-                
-                # Show available contact information
-                contact_info = []
-                if values.get("Extracted Contact"):
-                    contact_info.append(f"Extracted Contact: {values['Extracted Contact']}")
-                if values.get("Sender Number"):
-                    contact_info.append(f"Sender Number: {values['Sender Number']}")
-                if values.get("Extracted Name"):
-                    contact_info.append(f"Extracted Name: {values['Extracted Name']}")
-                if values.get("Sender Name"):
-                    contact_info.append(f"Sender Name: {values['Sender Name']}")
-                
-                if contact_info:
-                    st.write(f"**{dealer_base_name}**: " + " | ".join(contact_info))
+        actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
+        dealer_numbers = []
+        for contact, name in contact_to_name.items():
+            if name == actual_name:
+                dealer_numbers.append(contact)
+        if dealer_numbers:
+            st.info(f"**📞 Contact: {actual_name}**")
+            cols = st.columns(len(dealer_numbers))
+            for i, num in enumerate(dealer_numbers):
+                formatted_num = format_phone_link(num)
+                cols[i].markdown(f'<a href="tel:{formatted_num}" style="display: inline-block; padding: 0.5rem 1rem; background-color: #25D366; color: white; text-decoration: none; border-radius: 0.5rem; font-weight: 600;">Call {num}</a>', unsafe_allow_html=True)
 
-    # Start with ALL data
     df_filtered = df.copy()
 
-    # Apply dealer filter if selected - FIRST FILTER to be applied
     if st.session_state.selected_dealer:
-        df_filtered = apply_dealer_filter(df_filtered, st.session_state.selected_dealer, dealer_groups_info)
+        actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
+        selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
+        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(lambda x: any(c in clean_number(str(x)) for c in selected_contacts))]
 
-    # Apply saved contact filter
     if st.session_state.selected_saved:
         row = contacts_df[contacts_df["Name"] == st.session_state.selected_saved].iloc[0] if not contacts_df.empty and not contacts_df[contacts_df["Name"] == st.session_state.selected_saved].empty else None
         selected_contacts = []
@@ -839,10 +680,8 @@ def show_plots_manager():
             for col in ["Contact1", "Contact2", "Contact3"]:
                 if col in row and pd.notna(row[col]):
                     selected_contacts.extend(extract_numbers(str(row[col])))
-        if selected_contacts:
-            df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(lambda x: any(n in clean_number(str(x)) for n in selected_contacts))]
+        df_filtered = df_filtered[df_filtered["Extracted Contact"].apply(lambda x: any(n in clean_number(str(x)) for n in selected_contacts))]
 
-    # Apply other filters
     if st.session_state.sector_filter:
         df_filtered = df_filtered[df_filtered["Sector"].isin(st.session_state.sector_filter)]
     
@@ -945,9 +784,10 @@ def show_plots_manager():
     
     hold_df_filtered = hold_df.copy()
     
-    # Apply dealer filter to hold data if selected
-    if st.session_state.selected_dealer:
-        hold_df_filtered = apply_dealer_filter(hold_df_filtered, st.session_state.selected_dealer, dealer_groups_info)
+    if st.session_state.selected_dealer and "Extracted Contact" in hold_df_filtered.columns:
+        actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
+        selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
+        hold_df_filtered = hold_df_filtered[hold_df_filtered["Extracted Contact"].apply(lambda x: any(c in clean_number(str(x)) for c in selected_contacts))]
     
     if st.session_state.sector_filter and "Sector" in hold_df_filtered.columns:
         hold_df_filtered = hold_df_filtered[hold_df_filtered["Sector"].isin(st.session_state.sector_filter)]
@@ -985,10 +825,10 @@ def show_plots_manager():
     
     if not todays_unique_listings.empty:
         todays_unique_filtered = todays_unique_listings.copy()
-        
-        # Apply dealer filter to today's unique listings if selected
         if st.session_state.selected_dealer:
-            todays_unique_filtered = apply_dealer_filter(todays_unique_filtered, st.session_state.selected_dealer, dealer_groups_info)
+            actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
+            selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
+            todays_unique_filtered = todays_unique_filtered[todays_unique_filtered["Extracted Contact"].apply(lambda x: any(c in clean_number(str(x)) for c in selected_contacts))]
         
         if st.session_state.sector_filter:
             todays_unique_filtered = todays_unique_filtered[todays_unique_filtered["Sector"].isin(st.session_state.sector_filter)]
@@ -1012,10 +852,10 @@ def show_plots_manager():
     
     if not weeks_unique_listings.empty:
         weeks_unique_filtered = weeks_unique_listings.copy()
-        
-        # Apply dealer filter to this week's unique listings if selected
         if st.session_state.selected_dealer:
-            weeks_unique_filtered = apply_dealer_filter(weeks_unique_filtered, st.session_state.selected_dealer, dealer_groups_info)
+            actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
+            selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
+            weeks_unique_filtered = weeks_unique_filtered[weeks_unique_filtered["Extracted Contact"].apply(lambda x: any(c in clean_number(str(x)) for c in selected_contacts))]
         
         if st.session_state.sector_filter:
             weeks_unique_filtered = weeks_unique_filtered[weeks_unique_filtered["Sector"].isin(st.session_state.sector_filter)]
@@ -1032,65 +872,44 @@ def show_plots_manager():
     else:
         st.info("No unique listings found for this week")
     
-    # Dealer-specific duplicates section (only show if exactly one dealer is selected)
-    if st.session_state.selected_dealer and len(st.session_state.selected_dealer) == 1:
+    if st.session_state.selected_dealer:
         st.markdown("---")
         st.subheader("👥 Dealer-Specific Duplicates")
         
-        # Get the single selected dealer
-        selected_dealer_display = st.session_state.selected_dealer[0]
-        dealer_base_name = re.sub(r'\s*\(\d+\s*listings\)$', '', selected_dealer_display)
+        actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
+        selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
         
-        if selected_dealer_display in dealer_groups_info:
-            group_info = dealer_groups_info[selected_dealer_display]
-            values = group_info["values"]
+        styled_dealer_duplicates, dealer_duplicates_df = create_dealer_specific_duplicates_view(df, selected_contacts)
+        
+        if not st.session_state.missing_contact_filter and not dealer_duplicates_df.empty:
+            dealer_duplicates_df = dealer_duplicates_df[
+                ~(dealer_duplicates_df["Extracted Contact"].isna() | (dealer_duplicates_df["Extracted Contact"] == "")) | 
+                ~(dealer_duplicates_df["Extracted Name"].isna() | (dealer_duplicates_df["Extracted Name"] == ""))
+            ]
+        
+        if not dealer_duplicates_df.empty:
+            st.info(f"Showing duplicate listings for dealer **{actual_name}** - matching Sector, Plot No, Street No, Plot Size but different Contacts/Names")
             
-            # Get all contacts from this dealer group
-            dealer_contacts = []
-            if values.get("Extracted Contact"):
-                contacts = extract_numbers(values["Extracted Contact"])
-                dealer_contacts.extend(contacts)
-            if values.get("Sender Number"):
-                contacts = extract_numbers(values["Sender Number"])
-                dealer_contacts.extend(contacts)
+            # --- FIX: Avoid rendering HTML if None is returned (Too many rows) ---
+            if styled_dealer_duplicates is not None:
+                st.markdown("**Color Grouped View (Read-only)**")
+                try:
+                    styled_html = styled_dealer_duplicates.to_html()
+                    st.markdown(f'<div style="height: 400px; overflow: auto; border: 1px solid #e6e9ef; border-radius: 0.5rem;">{styled_html}</div>', unsafe_allow_html=True)
+                except:
+                    st.warning("Preview too large to render with colors.")
             
-            dealer_contacts = list(set(dealer_contacts))
-            
-            styled_dealer_duplicates, dealer_duplicates_df = create_dealer_specific_duplicates_view(df, dealer_contacts)
-            
-            if not st.session_state.missing_contact_filter and not dealer_duplicates_df.empty:
-                dealer_duplicates_df = dealer_duplicates_df[
-                    ~(dealer_duplicates_df["Extracted Contact"].isna() | (dealer_duplicates_df["Extracted Contact"] == "")) | 
-                    ~(dealer_duplicates_df["Extracted Name"].isna() | (dealer_duplicates_df["Extracted Name"] == ""))
-                ]
-            
-            if not dealer_duplicates_df.empty:
-                st.info(f"Showing duplicate listings for dealer **{dealer_base_name}** - matching Sector, Plot No, Street No, Plot Size but different Contacts/Names")
-                
-                # --- FIX: Avoid rendering HTML if None is returned (Too many rows) ---
-                if styled_dealer_duplicates is not None:
-                    st.markdown("**Color Grouped View (Read-only)**")
-                    try:
-                        styled_html = styled_dealer_duplicates.to_html()
-                        st.markdown(f'<div style="height: 400px; overflow: auto; border: 1px solid #e6e9ef; border-radius: 0.5rem;">{styled_html}</div>', unsafe_allow_html=True)
-                    except:
-                        st.warning("Preview too large to render with colors.")
-                
-                st.markdown("---")
-                st.markdown("**Actionable View (With Checkboxes)**")
-                dealer_duplicates_df = sort_dataframe_with_i15_street_no(dealer_duplicates_df)
-                display_table_with_actions(dealer_duplicates_df, "Dealer_Duplicates", height=400, show_hold_button=True)
-            else:
-                st.info(f"No dealer-specific duplicates found for **{dealer_base_name}**")
+            st.markdown("---")
+            st.markdown("**Actionable View (With Checkboxes)**")
+            dealer_duplicates_df = sort_dataframe_with_i15_street_no(dealer_duplicates_df)
+            display_table_with_actions(dealer_duplicates_df, "Dealer_Duplicates", height=400, show_hold_button=True)
+        else:
+            st.info(f"No dealer-specific duplicates found for **{actual_name}**")
     
     st.markdown("---")
     st.subheader("✅ Sold Listings (Filtered)")
     
     sold_df_filtered = sold_df.copy()
-    
-    # Apply dealer filter to sold listings if selected
-    if st.session_state.selected_dealer:
-        sold_df_filtered = apply_dealer_filter(sold_df_filtered, st.session_state.selected_dealer, dealer_groups_info)
     
     if st.session_state.sector_filter and "Sector" in sold_df_filtered.columns:
         sold_df_filtered = sold_df_filtered[sold_df_filtered["Sector"].isin(st.session_state.sector_filter)]
