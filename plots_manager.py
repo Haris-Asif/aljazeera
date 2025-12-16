@@ -450,8 +450,176 @@ def reset_filter_session_state_after_deletion():
     
     # Update features filter
     if 'selected_features' in st.session_state:
-        all_features = get_all_unique_features(df)
-        st.session_state.selected_features = [f for f in st.session_state.selected_features if f in all_features]
+        # Use fixed feature list instead of dynamic one
+        fixed_features = get_fixed_feature_options()
+        st.session_state.selected_features = [f for f in st.session_state.selected_features if f in fixed_features]
+
+def get_fixed_feature_options():
+    """Return the fixed list of feature options for filtering"""
+    return [
+        "Road",
+        "SSR", "ESR", "WSR", "NSR", "MCDR",
+        "50 feet", "70 feet", "100 feet", "150 feet", "200 feet",
+        "Double road", "Main Double road", "service road", 
+        "South service road", "East service road", "West service road", "North Service road",
+        "Both plot", "pair plot", "jora plot", 
+        "Corner", "carnar", "cornar",
+        "Extra Land", 
+        "Park face", 
+        "Sun face",  
+        "Front open", 
+        "Back open", 
+        "Masjid", "Mosque", 
+        "Shopping centre", 
+        "Play ground", 
+        "School", 
+        "Markaz",
+        "Urgent sale", 
+        "Fori sale",
+        "Direct Deal", 
+        "100% Confirm", 
+        "File Available", 
+        "File in Hand", 
+        "Letter available", 
+        "Deal with Owner", 
+        "Direct Deal Alloty", 
+        "Own Biyana", 
+        "Possation Letter", 
+        "Map approved", 
+        "First Transfer", 
+        "Ready Transfer", 
+        "NDC", "NDC ready", 
+        "Reasonable price", 
+        "One day cash", 
+        "Cash deal", 
+        "Basement"
+    ]
+
+def fuzzy_feature_match_enhanced(features_text, selected_features):
+    """
+    Enhanced feature matching that checks if any of the selected features 
+    (or their variants) are present in the features text.
+    
+    Args:
+        features_text: String containing features
+        selected_features: List of selected feature keywords
+    
+    Returns:
+        Boolean indicating if any match is found
+    """
+    if not features_text or not selected_features:
+        return False
+    
+    features_text = str(features_text).lower()
+    
+    # Check each selected feature
+    for feature in selected_features:
+        feature_lower = feature.lower()
+        
+        # Direct match
+        if feature_lower in features_text:
+            return True
+        
+        # Handle common variants
+        variants = {
+            "ssr": ["south service road", "south service"],
+            "esr": ["east service road", "east service"],
+            "wsr": ["west service road", "west service"],
+            "nsr": ["north service road", "north service"],
+            "mcdr": ["main central double road", "main central"],
+            "50 feet": ["50 ft", "50'", "50ft"],
+            "70 feet": ["70 ft", "70'", "70ft"],
+            "100 feet": ["100 ft", "100'", "100ft"],
+            "150 feet": ["150 ft", "150'", "150ft"],
+            "200 feet": ["200 ft", "200'", "200ft"],
+            "corner": ["corner plot", "corner side"],
+            "park face": ["park facing", "facing park"],
+            "sun face": ["sun facing", "facing sun"],
+            "front open": ["front facing", "open front"],
+            "back open": ["back facing", "open back"],
+            "masjid": ["mosque", "masjid facing", "mosque facing"],
+            "play ground": ["playground", "play area"],
+            "shopping centre": ["shopping center", "market", "shops"],
+            "urgent sale": ["urgent", "quick sale", "immediate sale"],
+            "fori sale": ["fiori sale", "immediate"],
+            "file available": ["file", "file ready"],
+            "file in hand": ["file available", "original file"],
+            "letter available": ["letter", "possession letter", "allotment letter"],
+            "direct deal": ["direct", "owner deal"],
+            "100% confirm": ["confirmed", "guaranteed"],
+            "own biyana": ["biyana", "own byiana"],
+            "map approved": ["approved map", "approved plan"],
+            "first transfer": ["first owner", "original owner"],
+            "ready transfer": ["transfer ready", "ready to transfer"],
+            "ndc": ["no demand certificate", "ndc ready"],
+            "one day cash": ["cash deal", "immediate cash"],
+            "cash deal": ["cash payment", "cash only"],
+            "basement": ["basement available", "with basement"]
+        }
+        
+        # Check for variants
+        if feature_lower in variants:
+            for variant in variants[feature_lower]:
+                if variant in features_text:
+                    return True
+    
+    return False
+
+def sort_by_sector_and_plot_size(df):
+    """
+    Sort dataframe by Sector and Plot Size in ascending order.
+    Handles numeric plot sizes (e.g., '5 Marla', '10 Marla') and special cases.
+    """
+    if df.empty:
+        return df
+    
+    sorted_df = df.copy()
+    
+    # Extract numeric values from Plot Size for sorting
+    def extract_plot_size_numeric(plot_size):
+        if pd.isna(plot_size):
+            return 0
+        plot_size_str = str(plot_size).lower()
+        
+        # Extract first number
+        match = re.search(r'(\d+(\.\d+)?)', plot_size_str)
+        if match:
+            base_value = float(match.group(1))
+        else:
+            base_value = 0
+        
+        # Apply multipliers for different units
+        if 'kanal' in plot_size_str:
+            base_value *= 20  # 1 Kanal = 20 Marla
+        elif 'acre' in plot_size_str:
+            base_value *= 160  # 1 Acre = 160 Marla
+        
+        return base_value
+    
+    sorted_df["Sector_Sort"] = sorted_df["Sector"].astype(str).str.upper()
+    sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(extract_plot_size_numeric)
+    
+    # Sort by Sector then by numeric plot size
+    try:
+        sorted_df = sorted_df.sort_values(
+            by=["Sector_Sort", "Plot_Size_Numeric"], 
+            ascending=[True, True]
+        )
+    except Exception as e:
+        # Fallback to simple string sort if numeric sort fails
+        sorted_df = sorted_df.sort_values(
+            by=["Sector", "Plot Size"], 
+            ascending=[True, True]
+        )
+    
+    # Remove temporary columns
+    sorted_df = sorted_df.drop(
+        ["Sector_Sort", "Plot_Size_Numeric"], 
+        axis=1, 
+        errors="ignore"
+    )
+    
+    return sorted_df
 
 def show_plots_manager():
     st.header("🏠 Plots Management")
@@ -550,15 +718,22 @@ def show_plots_manager():
             price_to = st.number_input("Price To (in Lacs)", min_value=0.0, value=st.session_state.price_to, step=1.0, key="price_to_input")
             current_filters['price_to'] = price_to
         
-        all_features = get_all_unique_features(df)
+        # Get fixed feature options
+        fixed_features = get_fixed_feature_options()
         
         if 'selected_features' not in st.session_state or st.session_state.filters_reset:
             st.session_state.selected_features = []
         else:
             # Ensure session state only contains valid features
-            st.session_state.selected_features = [f for f in st.session_state.selected_features if f in all_features]
+            st.session_state.selected_features = [f for f in st.session_state.selected_features if f in fixed_features]
             
-        selected_features = st.multiselect("Select Feature(s)", options=all_features, default=st.session_state.selected_features, key="features_input")
+        # Feature filter with fixed options and multi-select
+        selected_features = st.multiselect(
+            "Select Feature(s)", 
+            options=fixed_features,
+            default=st.session_state.selected_features, 
+            key="features_input"
+        )
         current_filters['selected_features'] = selected_features
         
         if 'date_filter' not in st.session_state or st.session_state.filters_reset:
@@ -715,17 +890,21 @@ def show_plots_manager():
         if not df_filtered_with_price.empty:
             df_filtered = df_filtered_with_price[(df_filtered_with_price["ParsedPrice"] >= st.session_state.price_from) & (df_filtered_with_price["ParsedPrice"] <= st.session_state.price_to)]
 
+    # Apply enhanced features filter
     if st.session_state.selected_features:
-        df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match(x, st.session_state.selected_features))]
+        df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match_enhanced(x, st.session_state.selected_features))]
 
     df_filtered = filter_by_date(df_filtered, st.session_state.date_filter)
-    df_filtered = sort_dataframe_with_i15_street_no(df_filtered)
+    df_filtered_sorted_by_i15 = sort_dataframe_with_i15_street_no(df_filtered)
 
-    if "Timestamp" in df_filtered.columns:
-        cols = [col for col in df_filtered.columns if col != "Timestamp"] + ["Timestamp"]
-        df_filtered = df_filtered[cols]
+    if "Timestamp" in df_filtered_sorted_by_i15.columns:
+        cols = [col for col in df_filtered_sorted_by_i15.columns if col != "Timestamp"] + ["Timestamp"]
+        df_filtered_sorted_by_i15 = df_filtered_sorted_by_i15[cols]
 
-    display_main_table = df_filtered.copy()
+    # Create the sorted-by-sector-plot-size version
+    df_filtered_sorted_by_sector_size = sort_by_sector_and_plot_size(df_filtered)
+
+    display_main_table = df_filtered_sorted_by_i15.copy()
     i15_sectors = ["I-15", "I-15/1", "I-15/2", "I-15/3", "I-15/4"]
     
     def is_valid_listing(row):
@@ -778,6 +957,31 @@ def show_plots_manager():
         display_table_with_actions(display_main_table, "Main", height=300, show_hold_button=True)
     else:
         st.info("No listings match your filters")
+    
+    # NEW TABLE: Sorted by Sector and Plot Size
+    st.markdown("---")
+    st.subheader("📊 Listings Sorted by Sector & Plot Size (Ascending)")
+    
+    # Apply the same filtering to the sorted version
+    sorted_by_sector_size_table = df_filtered_sorted_by_sector_size.copy()
+    sorted_by_sector_size_table = sorted_by_sector_size_table[sorted_by_sector_size_table.apply(is_valid_listing, axis=1)]
+    
+    if not sorted_by_sector_size_table.empty:
+        st.info(f"Showing {len(sorted_by_sector_size_table)} listings sorted by Sector and Plot Size")
+        
+        # Download button for sorted table
+        csv_data_sorted = sorted_by_sector_size_table.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Sorted Listings as CSV", 
+            data=csv_data_sorted, 
+            file_name=f"sorted_listings_sector_size_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", 
+            mime="text/csv", 
+            key="download_csv_sorted"
+        )
+        
+        display_table_with_actions(sorted_by_sector_size_table, "Sorted_By_Sector_Size", height=300, show_hold_button=True)
+    else:
+        st.info("No listings available for sorted view")
     
     st.markdown("---")
     st.subheader("⏸️ Listings on Hold")
@@ -1067,7 +1271,7 @@ def show_plots_manager():
             st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
             st.stop()
 
-        messages = generate_whatsapp_messages_with_enhanced_filtering(df_filtered)
+        messages = generate_whatsapp_messages_with_features(df_filtered)
         if not messages:
             st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots; No 'offer required' in demand; No duplicates with same Sector/Plot No/Street No/Plot Size/Demand.")
         else:
@@ -1080,8 +1284,8 @@ def show_plots_manager():
                 st.markdown(f'<a href="{link}" target="_blank" style="display: inline-block; padding: 0.75rem 1.5rem; background-color: #25D366; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 0.5rem 0;">📩 Send Message {i+1}</a>', unsafe_allow_html=True)
                 st.markdown("---")
 
-def generate_whatsapp_messages_with_enhanced_filtering(df):
-    """Generate WhatsApp messages with enhanced filtering criteria"""
+def generate_whatsapp_messages_with_features(df):
+    """Generate WhatsApp messages with features included at the end of each listing"""
     if df.empty:
         return []
     
@@ -1093,6 +1297,7 @@ def generate_whatsapp_messages_with_enhanced_filtering(df):
         size = str(row.get("Plot Size", "")).strip()
         price = str(row.get("Demand", "")).strip()
         street = str(row.get("Street No", "")).strip()
+        features = str(row.get("Features", "")).strip()
         
         if not (sector and plot_no and size and price):
             continue
@@ -1103,7 +1308,10 @@ def generate_whatsapp_messages_with_enhanced_filtering(df):
         if "offer required" in price.lower():
             continue
             
-        eligible_listings.append(row)
+        # Create a copy with features
+        row_copy = row.copy()
+        row_copy["Features_For_Message"] = features if features else "N/A"
+        eligible_listings.append(row_copy)
     
     if not eligible_listings:
         return []
@@ -1126,7 +1334,35 @@ def generate_whatsapp_messages_with_enhanced_filtering(df):
             filtered_listings.append(group.iloc[0])
     
     final_df = pd.DataFrame(filtered_listings)
-    return generate_whatsapp_messages(final_df)
+    
+    # Group by sector for message organization
+    messages = []
+    
+    for sector, group in final_df.groupby("Sector"):
+        message_lines = [f"*{sector}*"]
+        
+        for _, row in group.iterrows():
+            plot_no = row.get("Plot No", "")
+            street_no = row.get("Street No", "")
+            plot_size = row.get("Plot Size", "")
+            demand = row.get("Demand", "")
+            features = row.get("Features_For_Message", "")
+            
+            line = f"Plot No: {plot_no}"
+            if street_no and str(street_no).strip():
+                line += f", Street No: {street_no}"
+            line += f", Size: {plot_size}, Demand: {demand}"
+            
+            # Add features at the end as requested
+            if features and features != "N/A":
+                line += f" | Features: {features}"
+            
+            message_lines.append(line)
+        
+        message = "\n".join(message_lines)
+        messages.append(message)
+    
+    return messages
 
 def sort_dataframe_with_i15_street_no(df):
     """Sort dataframe with special handling for I-15 sectors - sort by Street No"""
