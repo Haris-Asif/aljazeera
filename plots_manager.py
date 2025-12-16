@@ -567,46 +567,70 @@ def fuzzy_feature_match_enhanced(features_text, selected_features):
 
 def sort_by_sector_and_plot_size(df):
     """
-    Sort dataframe by Sector and Plot Size in ascending order.
-    Handles numeric plot sizes (e.g., '5 Marla', '10 Marla') and special cases.
+    Sort dataframe by Sector (ascending) and then by Plot Size (ascending) with proper numeric extraction.
+    This ensures smallest sector value appears first, then within that sector, listings are arranged 
+    in ascending order of Plot Size value.
     """
     if df.empty:
         return df
     
     sorted_df = df.copy()
     
-    # Extract numeric values from Plot Size for sorting
+    # Extract numeric values from Plot Size for proper sorting
     def extract_plot_size_numeric(plot_size):
         if pd.isna(plot_size):
             return 0
-        plot_size_str = str(plot_size).lower()
+        plot_size_str = str(plot_size).lower().strip()
         
-        # Extract first number
+        # Extract first number (handle decimals too)
         match = re.search(r'(\d+(\.\d+)?)', plot_size_str)
         if match:
             base_value = float(match.group(1))
         else:
-            base_value = 0
+            return 0
         
-        # Apply multipliers for different units
+        # Apply multipliers for different units to convert everything to Marla equivalent
         if 'kanal' in plot_size_str:
             base_value *= 20  # 1 Kanal = 20 Marla
         elif 'acre' in plot_size_str:
             base_value *= 160  # 1 Acre = 160 Marla
+        # If it's already in Marla or no unit specified, keep as is
         
         return base_value
     
-    sorted_df["Sector_Sort"] = sorted_df["Sector"].astype(str).str.upper()
+    # Create sort columns
+    sorted_df["Sector_Sort"] = sorted_df["Sector"].astype(str).str.strip()
+    
+    # Handle sector sorting: ensure proper alphanumeric sorting
+    # Convert sector to sortable format (e.g., "I-10" < "I-11" < "I-15" < "I-15/1")
+    def create_sector_sort_key(sector):
+        sector_str = str(sector).strip()
+        
+        # Extract prefix and numbers
+        match = re.match(r'([A-Za-z]+-)?(\d+)(?:/(\d+))?', sector_str)
+        if match:
+            prefix = match.group(1) or ""
+            main_num = int(match.group(2)) if match.group(2) else 0
+            sub_num = int(match.group(3)) if match.group(3) else 0
+            
+            # Return tuple for proper sorting
+            return (prefix, main_num, sub_num)
+        
+        return (sector_str, 0, 0)
+    
+    sorted_df["Sector_Sort_Key"] = sorted_df["Sector"].apply(create_sector_sort_key)
     sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(extract_plot_size_numeric)
     
     # Sort by Sector then by numeric plot size
     try:
         sorted_df = sorted_df.sort_values(
-            by=["Sector_Sort", "Plot_Size_Numeric"], 
-            ascending=[True, True]
+            by=["Sector_Sort_Key", "Plot_Size_Numeric"], 
+            ascending=[True, True],
+            key=lambda x: x if x.name != "Sector_Sort_Key" else None  # Handle tuple sorting
         )
     except Exception as e:
         # Fallback to simple string sort if numeric sort fails
+        st.warning(f"Could not sort by numeric values: {e}")
         sorted_df = sorted_df.sort_values(
             by=["Sector", "Plot Size"], 
             ascending=[True, True]
@@ -614,7 +638,7 @@ def sort_by_sector_and_plot_size(df):
     
     # Remove temporary columns
     sorted_df = sorted_df.drop(
-        ["Sector_Sort", "Plot_Size_Numeric"], 
+        ["Sector_Sort", "Sector_Sort_Key", "Plot_Size_Numeric"], 
         axis=1, 
         errors="ignore"
     )
@@ -904,30 +928,16 @@ def show_plots_manager():
     # Create the sorted-by-sector-plot-size version
     df_filtered_sorted_by_sector_size = sort_by_sector_and_plot_size(df_filtered)
 
+    # REMOVED: The is_valid_listing validation filter
     display_main_table = df_filtered_sorted_by_i15.copy()
-    i15_sectors = ["I-15", "I-15/1", "I-15/2", "I-15/3", "I-15/4"]
     
-    def is_valid_listing(row):
-        sector = str(row.get("Sector", "")).strip()
-        plot_no = str(row.get("Plot No", "")).strip()
-        plot_size = str(row.get("Plot Size", "")).strip()
-        demand = str(row.get("Demand", "")).strip()
-        street_no = str(row.get("Street No", "")).strip()
-        
-        if not (sector and plot_no and plot_size and demand):
-            return False
-        if any(i15_sector in sector for i15_sector in i15_sectors):
-            return bool(street_no)
-        return True
-    
-    display_main_table = display_main_table[display_main_table.apply(is_valid_listing, axis=1)]
-
     st.subheader("📋 Filtered Listings")
     
     if not display_main_table.empty:
         csv_data = display_main_table.to_csv(index=False)
         st.download_button(label="📥 Download Filtered Listings as CSV", data=csv_data, file_name=f"filtered_listings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv", key="download_csv")
     
+    # Calculate WhatsApp eligible count (keeping existing logic for info display)
     whatsapp_eligible_count = 0
     for _, row in df_filtered.iterrows():
         sector = str(row.get("Sector", "")).strip()
@@ -962,12 +972,11 @@ def show_plots_manager():
     st.markdown("---")
     st.subheader("📊 Listings Sorted by Sector & Plot Size (Ascending)")
     
-    # Apply the same filtering to the sorted version
+    # Apply the same filtering to the sorted version (NO validation filter)
     sorted_by_sector_size_table = df_filtered_sorted_by_sector_size.copy()
-    sorted_by_sector_size_table = sorted_by_sector_size_table[sorted_by_sector_size_table.apply(is_valid_listing, axis=1)]
     
     if not sorted_by_sector_size_table.empty:
-        st.info(f"Showing {len(sorted_by_sector_size_table)} listings sorted by Sector and Plot Size")
+        st.info(f"Showing {len(sorted_by_sector_size_table)} listings sorted by Sector (ascending) and Plot Size (ascending)")
         
         # Download button for sorted table
         csv_data_sorted = sorted_by_sector_size_table.to_csv(index=False)
