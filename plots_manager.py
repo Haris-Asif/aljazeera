@@ -88,9 +88,13 @@ def get_dynamic_dealer_names(df, filters):
                 (df_temp_with_price["ParsedPrice"] <= filters.get('price_to', 1000))
             ]
     
-    # Apply features filter
-    if filters.get('selected_features'):
-        df_temp = df_temp[df_temp["Features"].apply(lambda x: fuzzy_feature_match(x, filters['selected_features']))]
+    # Apply features filter (both client and dealer)
+    if filters.get('selected_features_clients'):
+        df_temp = df_temp[df_temp["Features"].apply(lambda x: fuzzy_feature_match(x, filters['selected_features_clients']))]
+    
+    # Apply dealer features filter
+    if filters.get('selected_features_dealers'):
+        df_temp = df_temp[df_temp["Features"].apply(lambda x: fuzzy_feature_match(x, filters['selected_features_dealers']))]
     
     # Apply date filter
     df_temp = filter_by_date(df_temp, filters.get('date_filter', 'All'))
@@ -448,14 +452,18 @@ def reset_filter_session_state_after_deletion():
         all_plot_sizes = sorted([str(s) for s in df["Plot Size"].dropna().unique() if s and str(s).strip() != ""])
         st.session_state.plot_size_filter = [s for s in st.session_state.plot_size_filter if s in all_plot_sizes]
     
-    # Update features filter
-    if 'selected_features' in st.session_state:
-        # Use fixed feature list instead of dynamic one
-        fixed_features = get_fixed_feature_options()
-        st.session_state.selected_features = [f for f in st.session_state.selected_features if f in fixed_features]
+    # Update features filter (clients)
+    if 'selected_features_clients' in st.session_state:
+        fixed_client_features = get_client_feature_options()
+        st.session_state.selected_features_clients = [f for f in st.session_state.selected_features_clients if f in fixed_client_features]
+    
+    # Update features filter (dealers)
+    if 'selected_features_dealers' in st.session_state:
+        fixed_dealer_features = get_dealer_feature_options()
+        st.session_state.selected_features_dealers = [f for f in st.session_state.selected_features_dealers if f in fixed_dealer_features]
 
-def get_fixed_feature_options():
-    """Return the fixed list of feature options for filtering"""
+def get_client_feature_options():
+    """Return the fixed list of client feature options for filtering"""
     return [
         "Road",
         "SSR", "ESR", "WSR", "NSR", "MCDR",
@@ -473,7 +481,12 @@ def get_fixed_feature_options():
         "Shopping centre", 
         "Play ground", 
         "School", 
-        "Markaz",
+        "Markaz"
+    ]
+
+def get_dealer_feature_options():
+    """Return the fixed list of dealer feature options for filtering"""
+    return [
         "Urgent sale", 
         "Fori sale",
         "Direct Deal", 
@@ -570,6 +583,8 @@ def sort_by_sector_and_plot_size(df):
     Sort dataframe by Sector (ascending) and then by Plot Size (ascending) with proper numeric extraction.
     This ensures smallest sector value appears first, then within that sector, listings are arranged 
     in ascending order of Plot Size value.
+    
+    Special handling for sectors: I-10, I-10/1, I-10/2, I-10/3, I-10/4, etc.
     """
     if df.empty:
         return df
@@ -601,22 +616,23 @@ def sort_by_sector_and_plot_size(df):
     # Create sort columns
     sorted_df["Sector_Sort"] = sorted_df["Sector"].astype(str).str.strip()
     
-    # Handle sector sorting: ensure proper alphanumeric sorting
-    # Convert sector to sortable format (e.g., "I-10" < "I-11" < "I-15" < "I-15/1")
+    # Handle sector sorting: ensure proper alphanumeric sorting for I-10, I-10/1, I-10/2, etc.
     def create_sector_sort_key(sector):
-        sector_str = str(sector).strip()
+        sector_str = str(sector).strip().upper()
         
-        # Extract prefix and numbers
-        match = re.match(r'([A-Za-z]+-)?(\d+)(?:/(\d+))?', sector_str)
+        # Handle I-10, I-10/1, I-10/2, I-10/3, I-10/4 pattern
+        pattern = r'I-(\d+)(?:/(\d+))?'
+        match = re.match(pattern, sector_str)
+        
         if match:
-            prefix = match.group(1) or ""
-            main_num = int(match.group(2)) if match.group(2) else 0
-            sub_num = int(match.group(3)) if match.group(3) else 0
+            main_num = int(match.group(1)) if match.group(1) else 0
+            sub_num = int(match.group(2)) if match.group(2) else 0
             
-            # Return tuple for proper sorting
-            return (prefix, main_num, sub_num)
+            # Return tuple for proper sorting: (main_sector_number, subdivision_number)
+            return (main_num, sub_num)
         
-        return (sector_str, 0, 0)
+        # For non-matching patterns, use the original string
+        return (9999, 9999)  # Put non-standard sectors at the end
     
     sorted_df["Sector_Sort_Key"] = sorted_df["Sector"].apply(create_sector_sort_key)
     sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(extract_plot_size_numeric)
@@ -742,23 +758,41 @@ def show_plots_manager():
             price_to = st.number_input("Price To (in Lacs)", min_value=0.0, value=st.session_state.price_to, step=1.0, key="price_to_input")
             current_filters['price_to'] = price_to
         
-        # Get fixed feature options
-        fixed_features = get_fixed_feature_options()
+        # Get fixed feature options for clients
+        fixed_client_features = get_client_feature_options()
         
-        if 'selected_features' not in st.session_state or st.session_state.filters_reset:
-            st.session_state.selected_features = []
+        if 'selected_features_clients' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.selected_features_clients = []
         else:
             # Ensure session state only contains valid features
-            st.session_state.selected_features = [f for f in st.session_state.selected_features if f in fixed_features]
+            st.session_state.selected_features_clients = [f for f in st.session_state.selected_features_clients if f in fixed_client_features]
             
-        # Feature filter with fixed options and multi-select
-        selected_features = st.multiselect(
-            "Select Feature(s)", 
-            options=fixed_features,
-            default=st.session_state.selected_features, 
-            key="features_input"
+        # Feature filter for clients with fixed options and multi-select
+        selected_features_clients = st.multiselect(
+            "Features (Clients)", 
+            options=fixed_client_features,
+            default=st.session_state.selected_features_clients, 
+            key="features_clients_input"
         )
-        current_filters['selected_features'] = selected_features
+        current_filters['selected_features_clients'] = selected_features_clients
+        
+        # Get fixed feature options for dealers
+        fixed_dealer_features = get_dealer_feature_options()
+        
+        if 'selected_features_dealers' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.selected_features_dealers = []
+        else:
+            # Ensure session state only contains valid features
+            st.session_state.selected_features_dealers = [f for f in st.session_state.selected_features_dealers if f in fixed_dealer_features]
+            
+        # Feature filter for dealers with fixed options and multi-select
+        selected_features_dealers = st.multiselect(
+            "Features (Dealers)", 
+            options=fixed_dealer_features,
+            default=st.session_state.selected_features_dealers, 
+            key="features_dealers_input"
+        )
+        current_filters['selected_features_dealers'] = selected_features_dealers
         
         if 'date_filter' not in st.session_state or st.session_state.filters_reset:
             st.session_state.date_filter = "All"
@@ -823,7 +857,8 @@ def show_plots_manager():
             st.session_state.contact_filter = ""
             st.session_state.price_from = 0.0
             st.session_state.price_to = 1000.0
-            st.session_state.selected_features = []
+            st.session_state.selected_features_clients = []
+            st.session_state.selected_features_dealers = []
             st.session_state.date_filter = "All"
             st.session_state.selected_prop_type = "All"
             st.session_state.missing_contact_filter = False
@@ -842,7 +877,8 @@ def show_plots_manager():
     st.session_state.contact_filter = current_filters['contact_filter']
     st.session_state.price_from = current_filters['price_from']
     st.session_state.price_to = current_filters['price_to']
-    st.session_state.selected_features = current_filters['selected_features']
+    st.session_state.selected_features_clients = current_filters['selected_features_clients']
+    st.session_state.selected_features_dealers = current_filters['selected_features_dealers']
     st.session_state.date_filter = current_filters['date_filter']
     st.session_state.selected_prop_type = current_filters['selected_prop_type']
     st.session_state.missing_contact_filter = current_filters['missing_contact_filter']
@@ -914,9 +950,13 @@ def show_plots_manager():
         if not df_filtered_with_price.empty:
             df_filtered = df_filtered_with_price[(df_filtered_with_price["ParsedPrice"] >= st.session_state.price_from) & (df_filtered_with_price["ParsedPrice"] <= st.session_state.price_to)]
 
-    # Apply enhanced features filter
-    if st.session_state.selected_features:
-        df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match_enhanced(x, st.session_state.selected_features))]
+    # Apply client features filter
+    if st.session_state.selected_features_clients:
+        df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match_enhanced(x, st.session_state.selected_features_clients))]
+    
+    # Apply dealer features filter
+    if st.session_state.selected_features_dealers:
+        df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match_enhanced(x, st.session_state.selected_features_dealers))]
 
     df_filtered = filter_by_date(df_filtered, st.session_state.date_filter)
     df_filtered_sorted_by_i15 = sort_dataframe_with_i15_street_no(df_filtered)
@@ -1357,10 +1397,23 @@ def generate_whatsapp_messages_with_features(df):
             demand = row.get("Demand", "")
             features = row.get("Features_For_Message", "")
             
-            line = f"Plot No: {plot_no}"
-            if street_no and str(street_no).strip():
-                line += f", Street No: {street_no}"
-            line += f", Size: {plot_size}, Demand: {demand}"
+            # Check if sector is I-15 or its variations
+            sector_str = str(sector).strip().upper()
+            is_i15_sector = any([
+                sector_str == "I-15",
+                sector_str == "I-15/1",
+                sector_str == "I-15/2",
+                sector_str == "I-15/3",
+                sector_str == "I-15/4",
+                "2-15/3" in sector_str  # Handle the special case mentioned
+            ])
+            
+            if is_i15_sector:
+                # For I-15 sectors: Include Street No
+                line = f"Plot No: {plot_no} | Street No: {street_no} | Size: {plot_size} | Demand: {demand}"
+            else:
+                # For non-I-15 sectors: Exclude Street No
+                line = f"Plot No: {plot_no} | Size: {plot_size} | Demand: {demand}"
             
             # Add features at the end as requested
             if features and features != "N/A":
