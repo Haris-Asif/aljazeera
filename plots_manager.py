@@ -580,13 +580,9 @@ def fuzzy_feature_match_enhanced(features_text, selected_features):
 
 def sort_by_sector_and_plot_size(df):
     """
-    Sort dataframe by Plot Size (ascending), then by Sector (ascending), 
-    then by Plot No (ascending).
-    
-    This ensures smallest plot size appears first, then within that plot size,
-    listings are arranged by sector (I-10/1,2,3,4 < I-11/1,2,3,4 < I-12/1,2,3,4 
-    < I-14/1,2,3,4 < I-15/1,2,3,4 < I-16/1,2,3,4), and within each sector,
-    listings are arranged by Plot No (ascending).
+    Sort dataframe by Sector (ascending) and then by Plot Size (ascending) with proper numeric extraction.
+    This ensures smallest sector value appears first, then within that sector, listings are arranged 
+    in ascending order of Plot Size value.
     
     Special handling for sectors: I-10, I-10/1, I-10/2, I-10/3, I-10/4, etc.
     """
@@ -617,23 +613,10 @@ def sort_by_sector_and_plot_size(df):
         
         return base_value
     
-    # Extract numeric value from Plot No for sorting
-    def extract_plot_no_numeric(plot_no):
-        if pd.isna(plot_no):
-            return 0
-        plot_no_str = str(plot_no).strip()
-        
-        # Try to extract the first number
-        match = re.search(r'(\d+(\.\d+)?)', plot_no_str)
-        if match:
-            return float(match.group(1))
-        return 0
-    
     # Create sort columns
-    # 1. Plot Size numeric value
-    sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(extract_plot_size_numeric)
+    sorted_df["Sector_Sort"] = sorted_df["Sector"].astype(str).str.strip()
     
-    # 2. Sector sort key
+    # Handle sector sorting: ensure proper alphanumeric sorting for I-10, I-10/1, I-10/2, etc.
     def create_sector_sort_key(sector):
         sector_str = str(sector).strip().upper()
         
@@ -649,40 +632,162 @@ def sort_by_sector_and_plot_size(df):
             return (main_num, sub_num)
         
         # For non-matching patterns, use the original string
-        # We'll assign high values to put non-standard sectors at the end
-        return (9999, 9999)
+        return (9999, 9999)  # Put non-standard sectors at the end
     
     sorted_df["Sector_Sort_Key"] = sorted_df["Sector"].apply(create_sector_sort_key)
+    sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(extract_plot_size_numeric)
     
-    # 3. Plot No numeric value
-    sorted_df["Plot_No_Numeric"] = sorted_df["Plot No"].apply(extract_plot_no_numeric)
-    
-    # Sort by Plot Size first, then Sector, then Plot No
+    # Sort by Sector then by numeric plot size
     try:
         sorted_df = sorted_df.sort_values(
-            by=["Plot_Size_Numeric", "Sector_Sort_Key", "Plot_No_Numeric"], 
-            ascending=[True, True, True],
+            by=["Sector_Sort_Key", "Plot_Size_Numeric"], 
+            ascending=[True, True],
             key=lambda x: x if x.name != "Sector_Sort_Key" else None  # Handle tuple sorting
         )
     except Exception as e:
         # Fallback to simple string sort if numeric sort fails
         st.warning(f"Could not sort by numeric values: {e}")
         sorted_df = sorted_df.sort_values(
-            by=["Plot Size", "Sector", "Plot No"], 
-            ascending=[True, True, True]
+            by=["Sector", "Plot Size"], 
+            ascending=[True, True]
         )
     
     # Remove temporary columns
     sorted_df = sorted_df.drop(
-        ["Plot_Size_Numeric", "Sector_Sort_Key", "Plot_No_Numeric"], 
+        ["Sector_Sort", "Sector_Sort_Key", "Plot_Size_Numeric"], 
         axis=1, 
         errors="ignore"
     )
     
     return sorted_df
 
+def update_url_parameters():
+    """Update URL parameters based on current filter state"""
+    params = {}
+    
+    # Add all filter parameters to URL
+    if 'sector_filter' in st.session_state and st.session_state.sector_filter:
+        params['sector'] = ','.join(st.session_state.sector_filter)
+    
+    if 'plot_size_filter' in st.session_state and st.session_state.plot_size_filter:
+        params['plot_size'] = ','.join(st.session_state.plot_size_filter)
+    
+    if 'street_filter' in st.session_state and st.session_state.street_filter:
+        params['street'] = st.session_state.street_filter
+    
+    if 'plot_no_filter' in st.session_state and st.session_state.plot_no_filter:
+        params['plot_no'] = st.session_state.plot_no_filter
+    
+    if 'contact_filter' in st.session_state and st.session_state.contact_filter:
+        params['contact'] = st.session_state.contact_filter
+    
+    if 'price_from' in st.session_state and st.session_state.price_from != 0.0:
+        params['price_from'] = str(st.session_state.price_from)
+    
+    if 'price_to' in st.session_state and st.session_state.price_to != 1000.0:
+        params['price_to'] = str(st.session_state.price_to)
+    
+    if 'selected_features_clients' in st.session_state and st.session_state.selected_features_clients:
+        params['features_client'] = ','.join(st.session_state.selected_features_clients)
+    
+    if 'selected_features_dealers' in st.session_state and st.session_state.selected_features_dealers:
+        params['features_dealer'] = ','.join(st.session_state.selected_features_dealers)
+    
+    if 'date_filter' in st.session_state and st.session_state.date_filter != 'All':
+        params['date'] = st.session_state.date_filter
+    
+    if 'selected_prop_type' in st.session_state and st.session_state.selected_prop_type != 'All':
+        params['property_type'] = st.session_state.selected_prop_type
+    
+    if 'missing_contact_filter' in st.session_state and st.session_state.missing_contact_filter:
+        params['missing_contact'] = 'true'
+    
+    if 'selected_dealer' in st.session_state and st.session_state.selected_dealer:
+        params['dealer'] = st.session_state.selected_dealer
+    
+    if 'selected_saved' in st.session_state and st.session_state.selected_saved:
+        params['saved_contact'] = st.session_state.selected_saved
+    
+    # Update URL parameters
+    st.query_params.update(**params)
+
+def parse_url_parameters():
+    """Parse URL parameters and set session state"""
+    params = st.query_params
+    
+    # Sector filter
+    if 'sector' in params:
+        sectors = params['sector'].split(',')
+        st.session_state.sector_filter = [s.strip() for s in sectors if s.strip()]
+    
+    # Plot size filter
+    if 'plot_size' in params:
+        plot_sizes = params['plot_size'].split(',')
+        st.session_state.plot_size_filter = [ps.strip() for ps in plot_sizes if ps.strip()]
+    
+    # Street filter
+    if 'street' in params:
+        st.session_state.street_filter = params['street']
+    
+    # Plot no filter
+    if 'plot_no' in params:
+        st.session_state.plot_no_filter = params['plot_no']
+    
+    # Contact filter
+    if 'contact' in params:
+        st.session_state.contact_filter = params['contact']
+    
+    # Price filters
+    if 'price_from' in params:
+        try:
+            st.session_state.price_from = float(params['price_from'])
+        except:
+            st.session_state.price_from = 0.0
+    
+    if 'price_to' in params:
+        try:
+            st.session_state.price_to = float(params['price_to'])
+        except:
+            st.session_state.price_to = 1000.0
+    
+    # Features filters
+    if 'features_client' in params:
+        features = params['features_client'].split(',')
+        st.session_state.selected_features_clients = [f.strip() for f in features if f.strip()]
+    
+    if 'features_dealer' in params:
+        features = params['features_dealer'].split(',')
+        st.session_state.selected_features_dealers = [f.strip() for f in features if f.strip()]
+    
+    # Date filter
+    if 'date' in params:
+        st.session_state.date_filter = params['date']
+    
+    # Property type filter
+    if 'property_type' in params:
+        st.session_state.selected_prop_type = params['property_type']
+    
+    # Missing contact filter
+    if 'missing_contact' in params:
+        st.session_state.missing_contact_filter = params['missing_contact'].lower() == 'true'
+    
+    # Dealer filter
+    if 'dealer' in params:
+        st.session_state.selected_dealer = params['dealer']
+    
+    # Saved contact filter
+    if 'saved_contact' in params:
+        st.session_state.selected_saved = params['saved_contact']
+    
+    # Mark that filters were loaded from URL
+    st.session_state.filters_from_url = True
+
 def show_plots_manager():
     st.header("🏠 Plots Management")
+    
+    # Parse URL parameters on initial load
+    if 'filters_from_url' not in st.session_state:
+        parse_url_parameters()
     
     df = load_plot_data().fillna("")
     contacts_df = load_contacts()
@@ -867,6 +972,8 @@ def show_plots_manager():
         filters_changed = current_filters != st.session_state.last_filter_state
         if filters_changed:
             st.session_state.last_filter_state = current_filters.copy()
+            # Update URL parameters when filters change
+            update_url_parameters()
             st.rerun()
         
         if st.button("🔄 Reset All Filters", width='stretch', key="reset_filters_btn"):
@@ -886,6 +993,8 @@ def show_plots_manager():
             st.session_state.selected_saved = ""
             st.session_state.filters_reset = True
             st.session_state.last_filter_state = {}
+            # Clear URL parameters when resetting filters
+            st.query_params.clear()
             st.rerun()
         else:
             st.session_state.filters_reset = False
@@ -1023,6 +1132,10 @@ def show_plots_manager():
     
     st.info(f"📊 **Total filtered listings:** {len(display_main_table)} | ✅ **WhatsApp eligible:** {whatsapp_eligible_count}")
     
+    # Show current URL with filters
+    if st.query_params:
+        st.caption(f"🔗 **Shareable URL with current filters:** `{st.query_params}`")
+    
     if not display_main_table.empty:
         display_table_with_actions(display_main_table, "Main", height=300, show_hold_button=True)
     else:
@@ -1036,7 +1149,7 @@ def show_plots_manager():
     sorted_by_sector_size_table = df_filtered_sorted_by_sector_size.copy()
     
     if not sorted_by_sector_size_table.empty:
-        st.info(f"Showing {len(sorted_by_sector_size_table)} listings sorted by Plot Size (ascending), then Sector (ascending), then Plot No (ascending)")
+        st.info(f"Showing {len(sorted_by_sector_size_table)} listings sorted by Sector (ascending) and Plot Size (ascending)")
         
         # Download button for sorted table
         csv_data_sorted = sorted_by_sector_size_table.to_csv(index=False)
