@@ -1,8 +1,138 @@
 import streamlit as st
 import pandas as pd
-import tempfile
-import os
-from utils import load_contacts, delete_contacts_from_sheet, add_contacts_batch, parse_vcf_file, add_contact_to_sheet
+import re
+import quopri
+from utils import (
+    load_contacts, 
+    delete_contacts_from_sheet, 
+    add_contacts_batch, 
+    add_contact_to_sheet
+)
+
+def parse_vcf_content(file_content):
+    """
+    Robust VCF parser specifically designed for VCF 2.1 files with 
+    Quoted-Printable encoding and large Base64 photo blocks.
+    """
+    contacts = []
+    current_contact = {}
+    
+    # Specific flags
+    in_photo = False
+    
+    # Decode bytes to string, handling potential errors
+    if isinstance(file_content, bytes):
+        try:
+            content_str = file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            content_str = file_content.decode('latin-1') # Fallback for older encodings
+    else:
+        content_str = file_content
+
+    lines = content_str.splitlines()
+
+    for line in lines:
+        line = line.strip()
+        
+        # 1. Skip empty lines
+        if not line:
+            continue
+            
+        # 2. Handle Photo Blocks (Skip them to prevent freezing)
+        if line.startswith('PHOTO'):
+            in_photo = True
+            continue
+        if in_photo:
+            # If we are inside a photo block, look for the start of a new tag
+            # (Capital letters followed by : or ;) or the end of the card.
+            if re.match(r'^[A-Z]+(:|;)', line) or line == 'END:VCARD':
+                in_photo = False
+                # If it was a tag, don't skip this line, process it below
+                if line == 'END:VCARD':
+                    pass 
+                else:
+                    # It's a new tag, fall through to processing
+                    pass
+            else:
+                # Still inside photo data, skip
+                continue
+
+        # 3. Start/End of Card
+        if line == 'BEGIN:VCARD':
+            current_contact = {'phones': []}
+            continue
+        elif line == 'END:VCARD':
+            if current_contact and (current_contact.get('Name') or current_contact.get('phones')):
+                # Flatten phone numbers into Contact1, Contact2, Contact3
+                phones = current_contact.pop('phones', [])
+                
+                # Remove duplicates while preserving order
+                unique_phones = []
+                [unique_phones.append(p) for p in phones if p not in unique_phones]
+                
+                # Assign to specific keys
+                current_contact['Contact1'] = unique_phones[0] if len(unique_phones) > 0 else ""
+                current_contact['Contact2'] = unique_phones[1] if len(unique_phones) > 1 else ""
+                current_contact['Contact3'] = unique_phones[2] if len(unique_phones) > 2 else ""
+                
+                # Ensure other fields exist
+                current_contact.setdefault('Email', '')
+                current_contact.setdefault('Address', '')
+                
+                contacts.append(current_contact)
+            current_contact = {}
+            continue
+
+        # 4. Extract Full Name (FN)
+        if line.startswith('FN'):
+            # Remove "FN:" or "FN;CHARSET=...:" prefix
+            raw_name = re.sub(r'^FN.*?:', '', line)
+            
+            # Decode quoted printable if detected (contains = and hex)
+            if '=' in line or 'ENCODING=QUOTED-PRINTABLE' in line:
+                try:
+                    # quopri handles the =4D=20=32 conversion
+                    raw_name = quopri.decodestring(raw_name).decode('utf-8')
+                except:
+                    pass
+            
+            current_contact['Name'] = raw_name.strip()
+
+        # 5. Extract Name (N) as fallback if FN was missing
+        elif line.startswith('N:') or line.startswith('N;'):
+            if 'Name' not in current_contact:
+                parts = line.split(':')[-1].split(';')
+                # Join non-empty parts (Family;Given;Middle)
+                name_parts = [p.strip() for p in parts if p.strip()]
+                # Reverse to get "Given Family" order
+                current_contact['Name'] = " ".join(name_parts[::-1])
+
+        # 6. Extract Phone Numbers (TEL)
+        elif line.startswith('TEL'):
+            # Extract the number part after the last colon
+            number_str = line.split(':')[-1]
+            
+            # CLEANING: Remove spaces, dashes, parentheses, non-numeric chars
+            # Keep only digits and the plus sign
+            clean_number = re.sub(r'[^0-9+]', '', number_str)
+            
+            # Fix leading 00 to +
+            if clean_number.startswith('00'):
+                clean_number = '+' + clean_number[2:]
+            
+            # Optional: You can add specific logic here to format numbers 
+            # e.g. removing +92 and adding 0, but standard clean is usually best.
+            
+            if clean_number:
+                current_contact['phones'].append(clean_number)
+                
+        # 7. Extract Email
+        elif line.startswith('EMAIL'):
+            email_str = line.split(':')[-1]
+            if '@' in email_str:
+                current_contact['Email'] = email_str.strip()
+
+    return contacts
 
 def show_contacts_manager():
     st.header("👥 Contacts Management")
@@ -22,21 +152,18 @@ def show_contacts_manager():
         st.metric("📇 Total Contacts", total_contacts)
     
     with col2:
-        # Safe column access for Email
         contacts_with_email = 0
         if not contacts_df.empty and "Email" in contacts_df.columns:
             contacts_with_email = len(contacts_df[contacts_df["Email"].notna() & (contacts_df["Email"] != "")])
         st.metric("📧 With Email", contacts_with_email)
     
     with col3:
-        # Safe column access for Address
         contacts_with_address = 0
         if not contacts_df.empty and "Address" in contacts_df.columns:
             contacts_with_address = len(contacts_df[contacts_df["Address"].notna() & (contacts_df["Address"] != "")])
         st.metric("🏠 With Address", contacts_with_address)
     
     with col4:
-        # Safe column access for multiple contacts
         multiple_contacts = 0
         if not contacts_df.empty:
             if "Contact2" in contacts_df.columns and "Contact3" in contacts_df.columns:
@@ -82,12 +209,16 @@ def show_contacts_view(contacts_df):
     filtered_contacts = contacts_df.copy()
     
     if search_term:
-        filtered_contacts = filtered_contacts[
-            filtered_contacts["Name"].str.contains(search_term, case=False, na=False) |
-            filtered_contacts["Contact1"].str.contains(search_term, case=False, na=False) |
-            (filtered_contacts["Contact2"].str.contains(search_term, case=False, na=False) if "Contact2" in filtered_contacts.columns else False) |
-            (filtered_contacts["Contact3"].str.contains(search_term, case=False, na=False) if "Contact3" in filtered_contacts.columns else False)
-        ]
+        # Create a boolean mask for search
+        mask = filtered_contacts["Name"].str.contains(search_term, case=False, na=False)
+        mask |= filtered_contacts["Contact1"].str.contains(search_term, case=False, na=False)
+        
+        if "Contact2" in filtered_contacts.columns:
+            mask |= filtered_contacts["Contact2"].str.contains(search_term, case=False, na=False)
+        if "Contact3" in filtered_contacts.columns:
+            mask |= filtered_contacts["Contact3"].str.contains(search_term, case=False, na=False)
+            
+        filtered_contacts = filtered_contacts[mask]
     
     if filter_by == "With Email":
         if "Email" in filtered_contacts.columns:
@@ -114,11 +245,10 @@ def show_contacts_view(contacts_df):
         if "Timestamp" in filtered_contacts.columns:
             filtered_contacts = filtered_contacts.sort_values("Timestamp", ascending=True)
     
-    # Display contacts count
     st.info(f"**Showing {len(filtered_contacts)} of {len(contacts_df)} contacts**")
     
     if filtered_contacts.empty:
-        st.info("No contacts found matching your criteria.")
+        st.warning("No contacts found matching your criteria.")
         return
     
     # Create display dataframe with selection
@@ -228,32 +358,45 @@ def show_add_contact_form():
                     st.error("❌ Failed to add contact. Please try again.")
 
 def show_import_contacts():
-    """Import contacts from VCF file"""
+    """Import contacts from VCF file with Robust Parsing"""
     st.subheader("📤 Import Contacts from VCF")
     
     st.info("""
     **Instructions:**
-    - Upload a VCF (vCard) file exported from your phone contacts
-    - The system will extract names and phone numbers automatically
-    - You can review before importing
+    - Upload a VCF (vCard) file exported from your phone contacts.
+    - The system will **automatically clean** names (fix encoding like '=4D') and numbers (remove dashes).
+    - It supports parsing up to **3 numbers** per contact.
     """)
     
     uploaded_file = st.file_uploader("Choose a VCF file", type=['vcf'], key="vcf_uploader")
     
     if uploaded_file is not None:
-        # Parse VCF file
-        contacts = parse_vcf_file(uploaded_file)
+        # Read file bytes
+        file_bytes = uploaded_file.read()
+        
+        # Parse using the new robust function
+        contacts = parse_vcf_content(file_bytes)
         
         if contacts:
             st.success(f"✅ Successfully parsed {len(contacts)} contacts from VCF file!")
             
-            # Display preview
-            st.subheader("📋 Preview (First 10 Contacts)")
-            preview_df = pd.DataFrame(contacts[:10])
-            st.dataframe(preview_df, use_container_width=True)
+            # Convert to DataFrame for preview
+            preview_df = pd.DataFrame(contacts)
             
-            if len(contacts) > 10:
-                st.info(f"... and {len(contacts) - 10} more contacts")
+            # Ensure columns exist for display even if empty
+            required_cols = ['Name', 'Contact1', 'Contact2', 'Contact3', 'Email']
+            for col in required_cols:
+                if col not in preview_df.columns:
+                    preview_df[col] = ""
+            
+            # Reorder for clean preview
+            cols_to_show = [c for c in required_cols if c in preview_df.columns]
+            
+            st.subheader("📋 Preview (Cleaned Data)")
+            st.dataframe(preview_df[cols_to_show].head(20), use_container_width=True)
+            
+            if len(contacts) > 20:
+                st.info(f"... and {len(contacts) - 20} more contacts")
             
             # Import options
             st.subheader("🚀 Import Options")
@@ -261,17 +404,13 @@ def show_import_contacts():
             col1, col2 = st.columns(2)
             
             with col1:
-                import_all = st.button("📥 Import All Contacts", use_container_width=True)
-            
-            with col2:
-                import_selected = st.button("📋 Import Selected", use_container_width=True, disabled=True)
-                st.caption("Selective import coming soon")
+                import_all = st.button("📥 Import All Contacts to Sheet", use_container_width=True, type="primary")
             
             if import_all:
                 import_contacts_to_sheet(contacts)
         
         else:
-            st.error("❌ No contacts found in the VCF file or file format is not supported.")
+            st.error("❌ No valid contacts found. The file might be empty, encrypted, or corrupted.")
 
 def import_contacts_to_sheet(contacts):
     """Import parsed contacts to Google Sheets"""
@@ -283,8 +422,8 @@ def import_contacts_to_sheet(contacts):
     contacts_batch = []
     for contact in contacts:
         contacts_batch.append([
-            contact["Name"],
-            contact["Contact1"],
+            contact.get("Name", "Unknown"),
+            contact.get("Contact1", ""),
             contact.get("Contact2", ""),
             contact.get("Contact3", ""),
             contact.get("Email", ""),
