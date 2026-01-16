@@ -88,9 +88,13 @@ def get_dynamic_dealer_names(df, filters):
                 (df_temp_with_price["ParsedPrice"] <= filters.get('price_to', 1000))
             ]
     
-    # Apply features filter
-    if filters.get('selected_features'):
-        df_temp = df_temp[df_temp["Features"].apply(lambda x: fuzzy_feature_match(x, filters['selected_features']))]
+    # Apply features filter (both client and dealer)
+    if filters.get('selected_features_clients'):
+        df_temp = df_temp[df_temp["Features"].apply(lambda x: fuzzy_feature_match(x, filters['selected_features_clients']))]
+    
+    # Apply dealer features filter
+    if filters.get('selected_features_dealers'):
+        df_temp = df_temp[df_temp["Features"].apply(lambda x: fuzzy_feature_match(x, filters['selected_features_dealers']))]
     
     # Apply date filter
     df_temp = filter_by_date(df_temp, filters.get('date_filter', 'All'))
@@ -448,13 +452,342 @@ def reset_filter_session_state_after_deletion():
         all_plot_sizes = sorted([str(s) for s in df["Plot Size"].dropna().unique() if s and str(s).strip() != ""])
         st.session_state.plot_size_filter = [s for s in st.session_state.plot_size_filter if s in all_plot_sizes]
     
-    # Update features filter
-    if 'selected_features' in st.session_state:
-        all_features = get_all_unique_features(df)
-        st.session_state.selected_features = [f for f in st.session_state.selected_features if f in all_features]
+    # Update features filter (clients)
+    if 'selected_features_clients' in st.session_state:
+        fixed_client_features = get_client_feature_options()
+        st.session_state.selected_features_clients = [f for f in st.session_state.selected_features_clients if f in fixed_client_features]
+    
+    # Update features filter (dealers)
+    if 'selected_features_dealers' in st.session_state:
+        fixed_dealer_features = get_dealer_feature_options()
+        st.session_state.selected_features_dealers = [f for f in st.session_state.selected_features_dealers if f in fixed_dealer_features]
+
+def get_client_feature_options():
+    """Return the fixed list of client feature options for filtering"""
+    return [
+        "Road",
+        "SSR", "ESR", "WSR", "NSR", "MCDR",
+        "50 feet", "70 feet", "100 feet", "150 feet", "200 feet",
+        "Double road", "Main Double road", "service road", 
+        "South service road", "East service road", "West service road", "North Service road",
+        "Both plot", "pair plot", "jora plot", 
+        "Corner", "carnar", "cornar",
+        "Extra Land", 
+        "Park face", 
+        "Sun face",  
+        "Front open", 
+        "Back open", 
+        "Masjid", "Mosque", 
+        "Shopping centre", 
+        "Play ground", 
+        "School", 
+        "Markaz"
+    ]
+
+def get_dealer_feature_options():
+    """Return the fixed list of dealer feature options for filtering"""
+    return [
+        "Urgent sale", 
+        "Fori sale",
+        "Direct Deal", 
+        "100% Confirm", 
+        "File Available", 
+        "File in Hand", 
+        "Letter available", 
+        "Deal with Owner", 
+        "Direct Deal Alloty", 
+        "Own Biyana", 
+        "Possation Letter", 
+        "Map approved", 
+        "First Transfer", 
+        "Ready Transfer", 
+        "NDC", "NDC ready", 
+        "Reasonable price", 
+        "One day cash", 
+        "Cash deal", 
+        "Basement"
+    ]
+
+def fuzzy_feature_match_enhanced(features_text, selected_features):
+    """
+    Enhanced feature matching that checks if any of the selected features 
+    (or their variants) are present in the features text.
+    
+    Args:
+        features_text: String containing features
+        selected_features: List of selected feature keywords
+    
+    Returns:
+        Boolean indicating if any match is found
+    """
+    if not features_text or not selected_features:
+        return False
+    
+    features_text = str(features_text).lower()
+    
+    # Check each selected feature
+    for feature in selected_features:
+        feature_lower = feature.lower()
+        
+        # Direct match
+        if feature_lower in features_text:
+            return True
+        
+        # Handle common variants
+        variants = {
+            "ssr": ["south service road", "south service"],
+            "esr": ["east service road", "east service"],
+            "wsr": ["west service road", "west service"],
+            "nsr": ["north service road", "north service"],
+            "mcdr": ["main central double road", "main central"],
+            "50 feet": ["50 ft", "50'", "50ft"],
+            "70 feet": ["70 ft", "70'", "70ft"],
+            "100 feet": ["100 ft", "100'", "100ft"],
+            "150 feet": ["150 ft", "150'", "150ft"],
+            "200 feet": ["200 ft", "200'", "200ft"],
+            "corner": ["corner plot", "corner side"],
+            "park face": ["park facing", "facing park"],
+            "sun face": ["sun facing", "facing sun"],
+            "front open": ["front facing", "open front"],
+            "back open": ["back facing", "open back"],
+            "masjid": ["mosque", "masjid facing", "mosque facing"],
+            "play ground": ["playground", "play area"],
+            "shopping centre": ["shopping center", "market", "shops"],
+            "urgent sale": ["urgent", "quick sale", "immediate sale"],
+            "fori sale": ["fiori sale", "immediate"],
+            "file available": ["file", "file ready"],
+            "file in hand": ["file available", "original file"],
+            "letter available": ["letter", "possession letter", "allotment letter"],
+            "direct deal": ["direct", "owner deal"],
+            "100% confirm": ["confirmed", "guaranteed"],
+            "own biyana": ["biyana", "own byiana"],
+            "map approved": ["approved map", "approved plan"],
+            "first transfer": ["first owner", "original owner"],
+            "ready transfer": ["transfer ready", "ready to transfer"],
+            "ndc": ["no demand certificate", "ndc ready"],
+            "one day cash": ["cash deal", "immediate cash"],
+            "cash deal": ["cash payment", "cash only"],
+            "basement": ["basement available", "with basement"]
+        }
+        
+        # Check for variants
+        if feature_lower in variants:
+            for variant in variants[feature_lower]:
+                if variant in features_text:
+                    return True
+    
+    return False
+
+def sort_by_sector_and_plot_size(df):
+    """
+    Sort dataframe by Sector (ascending) and then by Plot Size (ascending) with proper numeric extraction.
+    This ensures smallest sector value appears first, then within that sector, listings are arranged 
+    in ascending order of Plot Size value.
+    
+    Special handling for sectors: I-10, I-10/1, I-10/2, I-10/3, I-10/4, etc.
+    """
+    if df.empty:
+        return df
+    
+    sorted_df = df.copy()
+    
+    # Extract numeric values from Plot Size for proper sorting
+    def extract_plot_size_numeric(plot_size):
+        if pd.isna(plot_size):
+            return 0
+        plot_size_str = str(plot_size).lower().strip()
+        
+        # Extract first number (handle decimals too)
+        match = re.search(r'(\d+(\.\d+)?)', plot_size_str)
+        if match:
+            base_value = float(match.group(1))
+        else:
+            return 0
+        
+        # Apply multipliers for different units to convert everything to Marla equivalent
+        if 'kanal' in plot_size_str:
+            base_value *= 20  # 1 Kanal = 20 Marla
+        elif 'acre' in plot_size_str:
+            base_value *= 160  # 1 Acre = 160 Marla
+        # If it's already in Marla or no unit specified, keep as is
+        
+        return base_value
+    
+    # Create sort columns
+    sorted_df["Sector_Sort"] = sorted_df["Sector"].astype(str).str.strip()
+    
+    # Handle sector sorting: ensure proper alphanumeric sorting for I-10, I-10/1, I-10/2, etc.
+    def create_sector_sort_key(sector):
+        sector_str = str(sector).strip().upper()
+        
+        # Handle I-10, I-10/1, I-10/2, I-10/3, I-10/4 pattern
+        pattern = r'I-(\d+)(?:/(\d+))?'
+        match = re.match(pattern, sector_str)
+        
+        if match:
+            main_num = int(match.group(1)) if match.group(1) else 0
+            sub_num = int(match.group(2)) if match.group(2) else 0
+            
+            # Return tuple for proper sorting: (main_sector_number, subdivision_number)
+            return (main_num, sub_num)
+        
+        # For non-matching patterns, use the original string
+        return (9999, 9999)  # Put non-standard sectors at the end
+    
+    sorted_df["Sector_Sort_Key"] = sorted_df["Sector"].apply(create_sector_sort_key)
+    sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(extract_plot_size_numeric)
+    
+    # Sort by Sector then by numeric plot size
+    try:
+        sorted_df = sorted_df.sort_values(
+            by=["Sector_Sort_Key", "Plot_Size_Numeric"], 
+            ascending=[True, True],
+            key=lambda x: x if x.name != "Sector_Sort_Key" else None  # Handle tuple sorting
+        )
+    except Exception as e:
+        # Fallback to simple string sort if numeric sort fails
+        st.warning(f"Could not sort by numeric values: {e}")
+        sorted_df = sorted_df.sort_values(
+            by=["Sector", "Plot Size"], 
+            ascending=[True, True]
+        )
+    
+    # Remove temporary columns
+    sorted_df = sorted_df.drop(
+        ["Sector_Sort", "Sector_Sort_Key", "Plot_Size_Numeric"], 
+        axis=1, 
+        errors="ignore"
+    )
+    
+    return sorted_df
+
+def update_url_parameters():
+    """Update URL parameters based on current filter state"""
+    params = {}
+    
+    # Add all filter parameters to URL
+    if 'sector_filter' in st.session_state and st.session_state.sector_filter:
+        params['sector'] = ','.join(st.session_state.sector_filter)
+    
+    if 'plot_size_filter' in st.session_state and st.session_state.plot_size_filter:
+        params['plot_size'] = ','.join(st.session_state.plot_size_filter)
+    
+    if 'street_filter' in st.session_state and st.session_state.street_filter:
+        params['street'] = st.session_state.street_filter
+    
+    if 'plot_no_filter' in st.session_state and st.session_state.plot_no_filter:
+        params['plot_no'] = st.session_state.plot_no_filter
+    
+    if 'contact_filter' in st.session_state and st.session_state.contact_filter:
+        params['contact'] = st.session_state.contact_filter
+    
+    if 'price_from' in st.session_state and st.session_state.price_from != 0.0:
+        params['price_from'] = str(st.session_state.price_from)
+    
+    if 'price_to' in st.session_state and st.session_state.price_to != 1000.0:
+        params['price_to'] = str(st.session_state.price_to)
+    
+    if 'selected_features_clients' in st.session_state and st.session_state.selected_features_clients:
+        params['features_client'] = ','.join(st.session_state.selected_features_clients)
+    
+    if 'selected_features_dealers' in st.session_state and st.session_state.selected_features_dealers:
+        params['features_dealer'] = ','.join(st.session_state.selected_features_dealers)
+    
+    if 'date_filter' in st.session_state and st.session_state.date_filter != 'All':
+        params['date'] = st.session_state.date_filter
+    
+    if 'selected_prop_type' in st.session_state and st.session_state.selected_prop_type != 'All':
+        params['property_type'] = st.session_state.selected_prop_type
+    
+    if 'missing_contact_filter' in st.session_state and st.session_state.missing_contact_filter:
+        params['missing_contact'] = 'true'
+    
+    if 'selected_dealer' in st.session_state and st.session_state.selected_dealer:
+        params['dealer'] = st.session_state.selected_dealer
+    
+    if 'selected_saved' in st.session_state and st.session_state.selected_saved:
+        params['saved_contact'] = st.session_state.selected_saved
+    
+    # Update URL parameters
+    st.query_params.update(**params)
+
+def parse_url_parameters():
+    """Parse URL parameters and set session state"""
+    params = st.query_params
+    
+    # Sector filter
+    if 'sector' in params:
+        sectors = params['sector'].split(',')
+        st.session_state.sector_filter = [s.strip() for s in sectors if s.strip()]
+    
+    # Plot size filter
+    if 'plot_size' in params:
+        plot_sizes = params['plot_size'].split(',')
+        st.session_state.plot_size_filter = [ps.strip() for ps in plot_sizes if ps.strip()]
+    
+    # Street filter
+    if 'street' in params:
+        st.session_state.street_filter = params['street']
+    
+    # Plot no filter
+    if 'plot_no' in params:
+        st.session_state.plot_no_filter = params['plot_no']
+    
+    # Contact filter
+    if 'contact' in params:
+        st.session_state.contact_filter = params['contact']
+    
+    # Price filters
+    if 'price_from' in params:
+        try:
+            st.session_state.price_from = float(params['price_from'])
+        except:
+            st.session_state.price_from = 0.0
+    
+    if 'price_to' in params:
+        try:
+            st.session_state.price_to = float(params['price_to'])
+        except:
+            st.session_state.price_to = 1000.0
+    
+    # Features filters
+    if 'features_client' in params:
+        features = params['features_client'].split(',')
+        st.session_state.selected_features_clients = [f.strip() for f in features if f.strip()]
+    
+    if 'features_dealer' in params:
+        features = params['features_dealer'].split(',')
+        st.session_state.selected_features_dealers = [f.strip() for f in features if f.strip()]
+    
+    # Date filter
+    if 'date' in params:
+        st.session_state.date_filter = params['date']
+    
+    # Property type filter
+    if 'property_type' in params:
+        st.session_state.selected_prop_type = params['property_type']
+    
+    # Missing contact filter
+    if 'missing_contact' in params:
+        st.session_state.missing_contact_filter = params['missing_contact'].lower() == 'true'
+    
+    # Dealer filter
+    if 'dealer' in params:
+        st.session_state.selected_dealer = params['dealer']
+    
+    # Saved contact filter
+    if 'saved_contact' in params:
+        st.session_state.selected_saved = params['saved_contact']
+    
+    # Mark that filters were loaded from URL
+    st.session_state.filters_from_url = True
 
 def show_plots_manager():
     st.header("🏠 Plots Management")
+    
+    # Parse URL parameters on initial load
+    if 'filters_from_url' not in st.session_state:
+        parse_url_parameters()
     
     df = load_plot_data().fillna("")
     contacts_df = load_contacts()
@@ -550,16 +883,41 @@ def show_plots_manager():
             price_to = st.number_input("Price To (in Lacs)", min_value=0.0, value=st.session_state.price_to, step=1.0, key="price_to_input")
             current_filters['price_to'] = price_to
         
-        all_features = get_all_unique_features(df)
+        # Get fixed feature options for clients
+        fixed_client_features = get_client_feature_options()
         
-        if 'selected_features' not in st.session_state or st.session_state.filters_reset:
-            st.session_state.selected_features = []
+        if 'selected_features_clients' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.selected_features_clients = []
         else:
             # Ensure session state only contains valid features
-            st.session_state.selected_features = [f for f in st.session_state.selected_features if f in all_features]
+            st.session_state.selected_features_clients = [f for f in st.session_state.selected_features_clients if f in fixed_client_features]
             
-        selected_features = st.multiselect("Select Feature(s)", options=all_features, default=st.session_state.selected_features, key="features_input")
-        current_filters['selected_features'] = selected_features
+        # Feature filter for clients with fixed options and multi-select
+        selected_features_clients = st.multiselect(
+            "Features (Clients)", 
+            options=fixed_client_features,
+            default=st.session_state.selected_features_clients, 
+            key="features_clients_input"
+        )
+        current_filters['selected_features_clients'] = selected_features_clients
+        
+        # Get fixed feature options for dealers
+        fixed_dealer_features = get_dealer_feature_options()
+        
+        if 'selected_features_dealers' not in st.session_state or st.session_state.filters_reset:
+            st.session_state.selected_features_dealers = []
+        else:
+            # Ensure session state only contains valid features
+            st.session_state.selected_features_dealers = [f for f in st.session_state.selected_features_dealers if f in fixed_dealer_features]
+            
+        # Feature filter for dealers with fixed options and multi-select
+        selected_features_dealers = st.multiselect(
+            "Features (Dealers)", 
+            options=fixed_dealer_features,
+            default=st.session_state.selected_features_dealers, 
+            key="features_dealers_input"
+        )
+        current_filters['selected_features_dealers'] = selected_features_dealers
         
         if 'date_filter' not in st.session_state or st.session_state.filters_reset:
             st.session_state.date_filter = "All"
@@ -614,6 +972,8 @@ def show_plots_manager():
         filters_changed = current_filters != st.session_state.last_filter_state
         if filters_changed:
             st.session_state.last_filter_state = current_filters.copy()
+            # Update URL parameters when filters change
+            update_url_parameters()
             st.rerun()
         
         if st.button("🔄 Reset All Filters", width='stretch', key="reset_filters_btn"):
@@ -624,7 +984,8 @@ def show_plots_manager():
             st.session_state.contact_filter = ""
             st.session_state.price_from = 0.0
             st.session_state.price_to = 1000.0
-            st.session_state.selected_features = []
+            st.session_state.selected_features_clients = []
+            st.session_state.selected_features_dealers = []
             st.session_state.date_filter = "All"
             st.session_state.selected_prop_type = "All"
             st.session_state.missing_contact_filter = False
@@ -632,6 +993,8 @@ def show_plots_manager():
             st.session_state.selected_saved = ""
             st.session_state.filters_reset = True
             st.session_state.last_filter_state = {}
+            # Clear URL parameters when resetting filters
+            st.query_params.clear()
             st.rerun()
         else:
             st.session_state.filters_reset = False
@@ -643,7 +1006,8 @@ def show_plots_manager():
     st.session_state.contact_filter = current_filters['contact_filter']
     st.session_state.price_from = current_filters['price_from']
     st.session_state.price_to = current_filters['price_to']
-    st.session_state.selected_features = current_filters['selected_features']
+    st.session_state.selected_features_clients = current_filters['selected_features_clients']
+    st.session_state.selected_features_dealers = current_filters['selected_features_dealers']
     st.session_state.date_filter = current_filters['date_filter']
     st.session_state.selected_prop_type = current_filters['selected_prop_type']
     st.session_state.missing_contact_filter = current_filters['missing_contact_filter']
@@ -715,40 +1079,34 @@ def show_plots_manager():
         if not df_filtered_with_price.empty:
             df_filtered = df_filtered_with_price[(df_filtered_with_price["ParsedPrice"] >= st.session_state.price_from) & (df_filtered_with_price["ParsedPrice"] <= st.session_state.price_to)]
 
-    if st.session_state.selected_features:
-        df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match(x, st.session_state.selected_features))]
+    # Apply client features filter
+    if st.session_state.selected_features_clients:
+        df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match_enhanced(x, st.session_state.selected_features_clients))]
+    
+    # Apply dealer features filter
+    if st.session_state.selected_features_dealers:
+        df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match_enhanced(x, st.session_state.selected_features_dealers))]
 
     df_filtered = filter_by_date(df_filtered, st.session_state.date_filter)
-    df_filtered = sort_dataframe_with_i15_street_no(df_filtered)
+    df_filtered_sorted_by_i15 = sort_dataframe_with_i15_street_no(df_filtered)
 
-    if "Timestamp" in df_filtered.columns:
-        cols = [col for col in df_filtered.columns if col != "Timestamp"] + ["Timestamp"]
-        df_filtered = df_filtered[cols]
+    if "Timestamp" in df_filtered_sorted_by_i15.columns:
+        cols = [col for col in df_filtered_sorted_by_i15.columns if col != "Timestamp"] + ["Timestamp"]
+        df_filtered_sorted_by_i15 = df_filtered_sorted_by_i15[cols]
 
-    display_main_table = df_filtered.copy()
-    i15_sectors = ["I-15", "I-15/1", "I-15/2", "I-15/3", "I-15/4"]
+    # Create the sorted-by-sector-plot-size version
+    df_filtered_sorted_by_sector_size = sort_by_sector_and_plot_size(df_filtered)
+
+    # REMOVED: The is_valid_listing validation filter
+    display_main_table = df_filtered_sorted_by_i15.copy()
     
-    def is_valid_listing(row):
-        sector = str(row.get("Sector", "")).strip()
-        plot_no = str(row.get("Plot No", "")).strip()
-        plot_size = str(row.get("Plot Size", "")).strip()
-        demand = str(row.get("Demand", "")).strip()
-        street_no = str(row.get("Street No", "")).strip()
-        
-        if not (sector and plot_no and plot_size and demand):
-            return False
-        if any(i15_sector in sector for i15_sector in i15_sectors):
-            return bool(street_no)
-        return True
-    
-    display_main_table = display_main_table[display_main_table.apply(is_valid_listing, axis=1)]
-
     st.subheader("📋 Filtered Listings")
     
     if not display_main_table.empty:
         csv_data = display_main_table.to_csv(index=False)
         st.download_button(label="📥 Download Filtered Listings as CSV", data=csv_data, file_name=f"filtered_listings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv", key="download_csv")
     
+    # Calculate WhatsApp eligible count (keeping existing logic for info display)
     whatsapp_eligible_count = 0
     for _, row in df_filtered.iterrows():
         sector = str(row.get("Sector", "")).strip()
@@ -774,10 +1132,38 @@ def show_plots_manager():
     
     st.info(f"📊 **Total filtered listings:** {len(display_main_table)} | ✅ **WhatsApp eligible:** {whatsapp_eligible_count}")
     
+    # Show current URL with filters
+    if st.query_params:
+        st.caption(f"🔗 **Shareable URL with current filters:** `{st.query_params}`")
+    
     if not display_main_table.empty:
         display_table_with_actions(display_main_table, "Main", height=300, show_hold_button=True)
     else:
         st.info("No listings match your filters")
+    
+    # NEW TABLE: Sorted by Sector and Plot Size
+    st.markdown("---")
+    st.subheader("📊 Listings Sorted by Sector & Plot Size (Ascending)")
+    
+    # Apply the same filtering to the sorted version (NO validation filter)
+    sorted_by_sector_size_table = df_filtered_sorted_by_sector_size.copy()
+    
+    if not sorted_by_sector_size_table.empty:
+        st.info(f"Showing {len(sorted_by_sector_size_table)} listings sorted by Sector (ascending) and Plot Size (ascending)")
+        
+        # Download button for sorted table
+        csv_data_sorted = sorted_by_sector_size_table.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Sorted Listings as CSV", 
+            data=csv_data_sorted, 
+            file_name=f"sorted_listings_sector_size_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", 
+            mime="text/csv", 
+            key="download_csv_sorted"
+        )
+        
+        display_table_with_actions(sorted_by_sector_size_table, "Sorted_By_Sector_Size", height=300, show_hold_button=True)
+    else:
+        st.info("No listings available for sorted view")
     
     st.markdown("---")
     st.subheader("⏸️ Listings on Hold")
@@ -1067,6 +1453,7 @@ def show_plots_manager():
             st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
             st.stop()
 
+        # UPDATED: Use the enhanced filtering logic from plots_manager (18).py
         messages = generate_whatsapp_messages_with_enhanced_filtering(df_filtered)
         if not messages:
             st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots; No 'offer required' in demand; No duplicates with same Sector/Plot No/Street No/Plot Size/Demand.")
@@ -1080,6 +1467,7 @@ def show_plots_manager():
                 st.markdown(f'<a href="{link}" target="_blank" style="display: inline-block; padding: 0.75rem 1.5rem; background-color: #25D366; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 0.5rem 0;">📩 Send Message {i+1}</a>', unsafe_allow_html=True)
                 st.markdown("---")
 
+# UPDATED: Replaced generate_whatsapp_messages_with_features with generate_whatsapp_messages_with_enhanced_filtering
 def generate_whatsapp_messages_with_enhanced_filtering(df):
     """Generate WhatsApp messages with enhanced filtering criteria"""
     if df.empty:
