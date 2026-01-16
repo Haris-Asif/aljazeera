@@ -580,9 +580,13 @@ def fuzzy_feature_match_enhanced(features_text, selected_features):
 
 def sort_by_sector_and_plot_size(df):
     """
-    Sort dataframe by Sector (ascending) and then by Plot Size (ascending) with proper numeric extraction.
-    This ensures smallest sector value appears first, then within that sector, listings are arranged 
-    in ascending order of Plot Size value.
+    Sort dataframe by Plot Size (ascending), then by Sector (ascending), 
+    then by Plot No (ascending).
+    
+    This ensures smallest plot size appears first, then within that plot size,
+    listings are arranged by sector (I-10/1,2,3,4 < I-11/1,2,3,4 < I-12/1,2,3,4 
+    < I-14/1,2,3,4 < I-15/1,2,3,4 < I-16/1,2,3,4), and within each sector,
+    listings are arranged by Plot No (ascending).
     
     Special handling for sectors: I-10, I-10/1, I-10/2, I-10/3, I-10/4, etc.
     """
@@ -613,10 +617,23 @@ def sort_by_sector_and_plot_size(df):
         
         return base_value
     
-    # Create sort columns
-    sorted_df["Sector_Sort"] = sorted_df["Sector"].astype(str).str.strip()
+    # Extract numeric value from Plot No for sorting
+    def extract_plot_no_numeric(plot_no):
+        if pd.isna(plot_no):
+            return 0
+        plot_no_str = str(plot_no).strip()
+        
+        # Try to extract the first number
+        match = re.search(r'(\d+(\.\d+)?)', plot_no_str)
+        if match:
+            return float(match.group(1))
+        return 0
     
-    # Handle sector sorting: ensure proper alphanumeric sorting for I-10, I-10/1, I-10/2, etc.
+    # Create sort columns
+    # 1. Plot Size numeric value
+    sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(extract_plot_size_numeric)
+    
+    # 2. Sector sort key
     def create_sector_sort_key(sector):
         sector_str = str(sector).strip().upper()
         
@@ -632,29 +649,32 @@ def sort_by_sector_and_plot_size(df):
             return (main_num, sub_num)
         
         # For non-matching patterns, use the original string
-        return (9999, 9999)  # Put non-standard sectors at the end
+        # We'll assign high values to put non-standard sectors at the end
+        return (9999, 9999)
     
     sorted_df["Sector_Sort_Key"] = sorted_df["Sector"].apply(create_sector_sort_key)
-    sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(extract_plot_size_numeric)
     
-    # Sort by Sector then by numeric plot size
+    # 3. Plot No numeric value
+    sorted_df["Plot_No_Numeric"] = sorted_df["Plot No"].apply(extract_plot_no_numeric)
+    
+    # Sort by Plot Size first, then Sector, then Plot No
     try:
         sorted_df = sorted_df.sort_values(
-            by=["Sector_Sort_Key", "Plot_Size_Numeric"], 
-            ascending=[True, True],
+            by=["Plot_Size_Numeric", "Sector_Sort_Key", "Plot_No_Numeric"], 
+            ascending=[True, True, True],
             key=lambda x: x if x.name != "Sector_Sort_Key" else None  # Handle tuple sorting
         )
     except Exception as e:
         # Fallback to simple string sort if numeric sort fails
         st.warning(f"Could not sort by numeric values: {e}")
         sorted_df = sorted_df.sort_values(
-            by=["Sector", "Plot Size"], 
-            ascending=[True, True]
+            by=["Plot Size", "Sector", "Plot No"], 
+            ascending=[True, True, True]
         )
     
     # Remove temporary columns
     sorted_df = sorted_df.drop(
-        ["Sector_Sort", "Sector_Sort_Key", "Plot_Size_Numeric"], 
+        ["Plot_Size_Numeric", "Sector_Sort_Key", "Plot_No_Numeric"], 
         axis=1, 
         errors="ignore"
     )
@@ -1149,7 +1169,7 @@ def show_plots_manager():
     sorted_by_sector_size_table = df_filtered_sorted_by_sector_size.copy()
     
     if not sorted_by_sector_size_table.empty:
-        st.info(f"Showing {len(sorted_by_sector_size_table)} listings sorted by Sector (ascending) and Plot Size (ascending)")
+        st.info(f"Showing {len(sorted_by_sector_size_table)} listings sorted by Plot Size (ascending), then Sector (ascending), then Plot No (ascending)")
         
         # Download button for sorted table
         csv_data_sorted = sorted_by_sector_size_table.to_csv(index=False)
