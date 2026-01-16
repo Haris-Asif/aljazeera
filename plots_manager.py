@@ -459,6 +459,323 @@ def reset_filter_session_state_after_deletion():
     
     # Update features filter (dealers)
     if 'selected_features_dealers' in st.session_state:
+        fixed_dealer_featur    for group_key in dealer_listings["GroupKey"].unique():
+        # Get all listings with this group key
+        matching_listings = df_normalized[
+            df_normalized.apply(
+                lambda row: f"{row['Sector_Norm']}|{row['Plot_No_Norm']}|{row['Street_No_Norm']}|{row['Plot_Size_Norm']}" == group_key,
+                axis=1
+            )
+        ]
+        
+        # Only include if there are multiple different contacts
+        unique_contacts = set()
+        for contact_str in matching_listings["Extracted Contact"]:
+            contacts = [clean_number(c) for c in str(contact_str).split(",") if clean_number(c)]
+            unique_contacts.update(contacts)
+        
+        if len(unique_contacts) > 1:
+            matching_listings = matching_listings.copy()
+            matching_listings["GroupKey"] = group_key
+            all_matching_listings.append(matching_listings)
+    
+    if not all_matching_listings:
+        return None, pd.DataFrame()
+    
+    # Combine all duplicates
+    duplicates_df = pd.concat(all_matching_listings, ignore_index=True)
+    
+    # Remove temporary normalized columns
+    duplicates_df = duplicates_df.drop(
+        ["Sector_Norm", "Plot_No_Norm", "Street_No_Norm", "Plot_Size_Norm"], 
+        axis=1, 
+        errors="ignore"
+    )
+    
+    # --- PERFORMANCE FIX: Limit styling row count ---
+    # Attempting to style and render HTML for hundreds of rows crashes the app
+    if len(duplicates_df) > 50:
+        # If too many rows, return just the dataframe, no styled object to prevent OOM
+        return None, duplicates_df
+
+    # Create styled version with color grouping
+    try:
+        groups = duplicates_df["GroupKey"].unique()
+        color_mapping = {group: f"hsl({int(i*360/len(groups))}, 70%, 80%)" for i, group in enumerate(groups)}
+        
+        def color_group(row):
+            return [f"background-color: {color_mapping[row['GroupKey']]}"] * len(row)
+        
+        styled_duplicates_df = duplicates_df.style.apply(color_group, axis=1)
+        return styled_duplicates_df, duplicates_df
+    except Exception as e:
+        return None, duplicates_df
+
+def get_todays_unique_listings(df):
+    """Get listings with new combinations of Sector & Plot No added today"""
+    if df.empty:
+        return pd.DataFrame()
+    
+    today = datetime.now().date()
+    
+    today_listings = df.copy()
+    today_listings['Date'] = pd.to_datetime(today_listings['Timestamp']).dt.date
+    today_listings = today_listings[today_listings['Date'] == today]
+    
+    if today_listings.empty:
+        return pd.DataFrame()
+    
+    before_today_listings = df.copy()
+    before_today_listings['Date'] = pd.to_datetime(before_today_listings['Timestamp']).dt.date
+    before_today_listings = before_today_listings[before_today_listings['Date'] < today]
+    
+    today_listings["CombinationKey"] = today_listings.apply(
+        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
+        axis=1
+    )
+    
+    before_today_listings["CombinationKey"] = before_today_listings.apply(
+        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
+        axis=1
+    )
+    
+    existing_keys = set(before_today_listings["CombinationKey"].unique())
+    unique_today_listings = today_listings[~today_listings["CombinationKey"].isin(existing_keys)]
+    
+    unique_today_listings = unique_today_listings.drop(["Date", "CombinationKey"], axis=1, errors="ignore")
+    return unique_today_listings
+
+def get_this_weeks_unique_listings(df):
+    """Get listings with new combinations of Sector & Plot No added in the last 7 days"""
+    if df.empty:
+        return pd.DataFrame()
+    
+    today = datetime.now().date()
+    week_ago = today - timedelta(days=7)
+    
+    this_week_listings = df.copy()
+    this_week_listings['Date'] = pd.to_datetime(this_week_listings['Timestamp']).dt.date
+    this_week_listings = this_week_listings[this_week_listings['Date'] >= week_ago]
+    
+    if this_week_listings.empty:
+        return pd.DataFrame()
+    
+    before_week_listings = df.copy()
+    before_week_listings['Date'] = pd.to_datetime(before_week_listings['Timestamp']).dt.date
+    before_week_listings = before_week_listings[before_week_listings['Date'] < week_ago]
+    
+    this_week_listings["CombinationKey"] = this_week_listings.apply(
+        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
+        axis=1
+    )
+    
+    before_week_listings["CombinationKey"] = before_week_listings.apply(
+        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
+        axis=1
+    )
+    
+    existing_keys = set(before_week_listings["CombinationKey"].unique())
+    unique_week_listings = this_week_listings[~this_week_listings["CombinationKey"].isin(existing_keys)]
+    
+    unique_week_listings = unique_week_listings.drop(["Date", "CombinationKey"], axis=1, errors="ignore")
+    return unique_week_listings
+
+def safe_display_dataframe(df, height=300):
+    """Safely display dataframe with error handling"""
+    if df.empty:
+        return
+    try:
+        safe_df = safe_dataframe_for_display(df)
+        st.dataframe(safe_df, use_container_width=True, height=height)
+    except Exception as e:
+        st.error(f"Could not display dataframe: {str(e)}")
+        st.table(df.head(50))
+
+def display_table_with_actions(df, table_name, height=300, show_hold_button=True):
+    """Display dataframe with edit/delete actions for any table"""
+    if df.empty:
+        st.info(f"No data available for {table_name}")
+        return
+    
+    display_df = df.copy().reset_index(drop=True)
+    display_df.insert(0, "Select", False)
+    display_df = safe_dataframe_for_display(display_df)
+    
+    if show_hold_button:
+        col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
+        with col1:
+            select_all = st.checkbox(f"Select All {table_name} Rows", key=f"select_all_{table_name}")
+        with col2:
+            edit_btn = st.button("✏️ Edit Selected", width='stretch', key=f"edit_{table_name}")
+        with col3:
+            mark_sold_btn = st.button("✅ Mark as Sold", width='stretch', key=f"mark_sold_{table_name}")
+        with col4:
+            hold_btn = st.button("⏸️ Hold", width='stretch', key=f"hold_{table_name}")
+        with col5:
+            delete_btn = st.button("🗑️ Delete Selected", type="primary", width='stretch', key=f"delete_{table_name}")
+    else:
+        col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
+        with col1:
+            select_all = st.checkbox(f"Select All {table_name} Rows", key=f"select_all_{table_name}")
+        with col2:
+            edit_btn = st.button("✏️ Edit Selected", width='stretch', key=f"edit_{table_name}")
+        with col3:
+            mark_sold_btn = st.button("✅ Mark as Sold", width='stretch', key=f"mark_sold_{table_name}")
+        with col4:
+            move_to_available_btn = st.button("🔄 Move To Available", width='stretch', key=f"move_available_{table_name}")
+        with col5:
+            delete_btn = st.button("🗑️ Delete Selected", type="primary", width='stretch', key=f"delete_{table_name}")
+    
+    if select_all:
+        display_df["Select"] = True
+    
+    column_config = {
+        "Select": st.column_config.CheckboxColumn(required=True),
+        "SheetRowNum": st.column_config.NumberColumn(disabled=True)
+    }
+    
+    edited_df = st.data_editor(
+        display_df,
+        column_config=column_config,
+        hide_index=True,
+        width='stretch',
+        disabled=display_df.columns.difference(["Select"]).tolist(),
+        key=f"{table_name}_data_editor"
+    )
+    
+    selected_indices = edited_df[edited_df["Select"]].index.tolist()
+    
+    if selected_indices:
+        st.success(f"**{len(selected_indices)} row(s) selected in {table_name}**")
+        
+        if edit_btn:
+            if len(selected_indices) == 1:
+                st.session_state.edit_mode = True
+                st.session_state.editing_row = display_df.iloc[selected_indices[0]].to_dict()
+                st.session_state.editing_table = table_name
+                st.rerun()
+            else:
+                st.warning("Please select only one row to edit.")
+        
+        if mark_sold_btn:
+            selected_display_rows = [display_df.iloc[idx] for idx in selected_indices]
+            mark_listings_sold(selected_display_rows)
+        
+        if show_hold_button and hold_btn:
+            selected_display_rows = [display_df.iloc[idx] for idx in selected_indices]
+            move_listings_to_hold(selected_display_rows, table_name)
+        
+        if not show_hold_button and move_to_available_btn:
+            selected_display_rows = [display_df.iloc[idx] for idx in selected_indices]
+            move_listings_to_plots(selected_display_rows)
+        
+        if delete_btn:
+            selected_display_rows = [display_df.iloc[idx] for idx in selected_indices]
+            row_nums = [int(row["SheetRowNum"]) for row in selected_display_rows]
+            st.warning(f"🗑️ Deleting {len(row_nums)} selected row(s) from {table_name}...")
+            success = delete_rows_from_sheet(row_nums)
+            if success:
+                st.success(f"✅ Successfully deleted {len(row_nums)} row(s) from {table_name}!")
+                # Clear cache and reset filters to prevent stale data issues
+                st.cache_data.clear()
+                # Reset filter session state to prevent multiselect errors
+                reset_filter_session_state_after_deletion()
+                st.rerun()
+            else:
+                st.error("❌ Failed to delete rows. Please try again.")
+
+def generate_dealer_contacts_pdf(dealer_names, contact_to_name, contacts_df):
+    """Generate a PDF with dealer contacts information"""
+    if not REPORTLAB_AVAILABLE:
+        st.error("PDF generation requires reportlab library. Please install it using: pip install reportlab")
+        return None
+    
+    try:
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        elements = []
+        
+        styles = getSampleStyleSheet()
+        title_style = styles['Heading1']
+        title = Paragraph("Dealer Contacts Report", title_style)
+        elements.append(title)
+        elements.append(Paragraph("<br/>", styles['Normal']))
+        
+        table_data = [['Name', 'Contact 1', 'Contact 2', 'Contact 3']]
+        
+        actual_names = []
+        for dealer in dealer_names:
+            if ". " in dealer:
+                actual_names.append(dealer.split(". ", 1)[1])
+            else:
+                actual_names.append(dealer)
+        
+        unique_names = sorted(set(actual_names))
+        
+        for name in unique_names:
+            dealer_contacts = []
+            for contact, contact_name in contact_to_name.items():
+                if contact_name == name:
+                    dealer_contacts.append(contact)
+            
+            contacts_row = [name]
+            for i in range(3):
+                if i < len(dealer_contacts):
+                    contacts_row.append(dealer_contacts[i])
+                else:
+                    contacts_row.append("")
+            
+            table_data.append(contacts_row)
+        
+        table = Table(table_data)
+        
+        style = TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 1), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ])
+        
+        table.setStyle(style)
+        elements.append(table)
+        
+        doc.build(elements)
+        pdf_data = buffer.getvalue()
+        buffer.close()
+        return pdf_data
+    
+    except Exception as e:
+        st.error(f"Error generating PDF: {str(e)}")
+        return None
+
+def reset_filter_session_state_after_deletion():
+    """Reset filter session state after deletion to prevent multiselect errors"""
+    # Reset multiselect filters to only include values that still exist
+    df = load_plot_data().fillna("")
+    
+    # Update sector filter
+    if 'sector_filter' in st.session_state:
+        all_sectors = sorted([str(s) for s in df["Sector"].dropna().unique() if s and str(s).strip() != ""])
+        st.session_state.sector_filter = [s for s in st.session_state.sector_filter if s in all_sectors]
+    
+    # Update plot size filter
+    if 'plot_size_filter' in st.session_state:
+        all_plot_sizes = sorted([str(s) for s in df["Plot Size"].dropna().unique() if s and str(s).strip() != ""])
+        st.session_state.plot_size_filter = [s for s in st.session_state.plot_size_filter if s in all_plot_sizes]
+    
+    # Update features filter (clients)
+    if 'selected_features_clients' in st.session_state:
+        fixed_client_features = get_client_feature_options()
+        st.session_state.selected_features_clients = [f for f in st.session_state.selected_features_clients if f in fixed_client_features]
+    
+    # Update features filter (dealers)
+    if 'selected_features_dealers' in st.session_state:
         fixed_dealer_features = get_dealer_feature_options()
         st.session_state.selected_features_dealers = [f for f in st.session_state.selected_features_dealers if f in fixed_dealer_features]
 
