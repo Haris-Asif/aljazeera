@@ -201,17 +201,32 @@ def get_todays_unique_listings(df):
     
     today = datetime.now().date()
     
-    today_listings = df.copy()
-    today_listings['Date'] = pd.to_datetime(today_listings['Timestamp']).dt.date
-    today_listings = today_listings[today_listings['Date'] == today]
+    # Make a copy to avoid modifying original
+    df_copy = df.copy()
+    
+    # Handle Timestamp conversion with error handling
+    try:
+        # Convert Timestamp to datetime, coercing errors to NaT
+        df_copy['Date'] = pd.to_datetime(df_copy['Timestamp'], errors='coerce').dt.date
+        
+        # Drop rows where timestamp conversion failed
+        df_copy = df_copy.dropna(subset=['Date'])
+        
+        if df_copy.empty:
+            return pd.DataFrame()
+        
+        today_listings = df_copy[df_copy['Date'] == today].copy()
+        before_today_listings = df_copy[df_copy['Date'] < today].copy()
+        
+    except Exception as e:
+        # If timestamp conversion fails, try alternative approach
+        st.warning(f"Timestamp conversion issue: {str(e)[:100]}")
+        return pd.DataFrame()
     
     if today_listings.empty:
         return pd.DataFrame()
     
-    before_today_listings = df.copy()
-    before_today_listings['Date'] = pd.to_datetime(before_today_listings['Timestamp']).dt.date
-    before_today_listings = before_today_listings[before_today_listings['Date'] < today]
-    
+    # Create combination keys
     today_listings["CombinationKey"] = today_listings.apply(
         lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
         axis=1
@@ -225,7 +240,14 @@ def get_todays_unique_listings(df):
     existing_keys = set(before_today_listings["CombinationKey"].unique())
     unique_today_listings = today_listings[~today_listings["CombinationKey"].isin(existing_keys)]
     
-    unique_today_listings = unique_today_listings.drop(["Date", "CombinationKey"], axis=1, errors="ignore")
+    # Drop temporary columns
+    columns_to_drop = ["Date", "CombinationKey"]
+    unique_today_listings = unique_today_listings.drop(
+        [col for col in columns_to_drop if col in unique_today_listings.columns], 
+        axis=1, 
+        errors="ignore"
+    )
+    
     return unique_today_listings
 
 def get_this_weeks_unique_listings(df):
@@ -236,17 +258,32 @@ def get_this_weeks_unique_listings(df):
     today = datetime.now().date()
     week_ago = today - timedelta(days=7)
     
-    this_week_listings = df.copy()
-    this_week_listings['Date'] = pd.to_datetime(this_week_listings['Timestamp']).dt.date
-    this_week_listings = this_week_listings[this_week_listings['Date'] >= week_ago]
+    # Make a copy to avoid modifying original
+    df_copy = df.copy()
+    
+    # Handle Timestamp conversion with error handling
+    try:
+        # Convert Timestamp to datetime, coercing errors to NaT
+        df_copy['Date'] = pd.to_datetime(df_copy['Timestamp'], errors='coerce').dt.date
+        
+        # Drop rows where timestamp conversion failed
+        df_copy = df_copy.dropna(subset=['Date'])
+        
+        if df_copy.empty:
+            return pd.DataFrame()
+        
+        this_week_listings = df_copy[df_copy['Date'] >= week_ago].copy()
+        before_week_listings = df_copy[df_copy['Date'] < week_ago].copy()
+        
+    except Exception as e:
+        # If timestamp conversion fails, try alternative approach
+        st.warning(f"Timestamp conversion issue: {str(e)[:100]}")
+        return pd.DataFrame()
     
     if this_week_listings.empty:
         return pd.DataFrame()
     
-    before_week_listings = df.copy()
-    before_week_listings['Date'] = pd.to_datetime(before_week_listings['Timestamp']).dt.date
-    before_week_listings = before_week_listings[before_week_listings['Date'] < week_ago]
-    
+    # Create combination keys
     this_week_listings["CombinationKey"] = this_week_listings.apply(
         lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
         axis=1
@@ -260,7 +297,14 @@ def get_this_weeks_unique_listings(df):
     existing_keys = set(before_week_listings["CombinationKey"].unique())
     unique_week_listings = this_week_listings[~this_week_listings["CombinationKey"].isin(existing_keys)]
     
-    unique_week_listings = unique_week_listings.drop(["Date", "CombinationKey"], axis=1, errors="ignore")
+    # Drop temporary columns
+    columns_to_drop = ["Date", "CombinationKey"]
+    unique_week_listings = unique_week_listings.drop(
+        [col for col in columns_to_drop if col in unique_week_listings.columns], 
+        axis=1, 
+        errors="ignore"
+    )
+    
     return unique_week_listings
 
 def safe_display_dataframe(df, height=300):
@@ -659,10 +703,13 @@ def sort_by_sector_and_plot_size(df):
     
     # Sort by Plot Size first, then Sector, then Plot No
     try:
+        # Convert Sector_Sort_Key to string for stable sorting
+        # This handles the tuple sorting issue
+        sorted_df["Sector_Sort_Str"] = sorted_df["Sector_Sort_Key"].astype(str)
+        
         sorted_df = sorted_df.sort_values(
-            by=["Plot_Size_Numeric", "Sector_Sort_Key", "Plot_No_Numeric"], 
-            ascending=[True, True, True],
-            key=lambda x: x if x.name != "Sector_Sort_Key" else None  # Handle tuple sorting
+            by=["Plot_Size_Numeric", "Sector_Sort_Str", "Plot_No_Numeric"], 
+            ascending=[True, True, True]
         )
     except Exception as e:
         # Fallback to simple string sort if numeric sort fails
@@ -673,8 +720,9 @@ def sort_by_sector_and_plot_size(df):
         )
     
     # Remove temporary columns
+    columns_to_drop = ["Plot_Size_Numeric", "Sector_Sort_Key", "Sector_Sort_Str", "Plot_No_Numeric"]
     sorted_df = sorted_df.drop(
-        ["Plot_Size_Numeric", "Sector_Sort_Key", "Plot_No_Numeric"], 
+        [col for col in columns_to_drop if col in sorted_df.columns], 
         axis=1, 
         errors="ignore"
     )
@@ -1487,7 +1535,6 @@ def show_plots_manager():
                 st.markdown(f'<a href="{link}" target="_blank" style="display: inline-block; padding: 0.75rem 1.5rem; background-color: #25D366; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 0.5rem 0;">📩 Send Message {i+1}</a>', unsafe_allow_html=True)
                 st.markdown("---")
 
-# UPDATED: Replaced generate_whatsapp_messages_with_features with generate_whatsapp_messages_with_enhanced_filtering
 def generate_whatsapp_messages_with_enhanced_filtering(df):
     """Generate WhatsApp messages with enhanced filtering criteria"""
     if df.empty:
@@ -1566,12 +1613,18 @@ def sort_dataframe_with_i15_street_no(df):
     sorted_df["Sort_Key"] = sorted_df.apply(get_sort_key, axis=1)
     
     try:
-        sorted_df = sorted_df.sort_values(by="Sort_Key", ascending=True)
+        # Convert sort key to string for stable sorting
+        sorted_df["Sort_Key_Str"] = sorted_df["Sort_Key"].astype(str)
+        sorted_df = sorted_df.sort_values(by="Sort_Key_Str", ascending=True)
     except Exception as e:
         st.warning(f"Could not sort dataframe: {e}")
         return df
     
-    sorted_df = sorted_df.drop(columns=["Plot_No_Numeric", "Street_No_Numeric", "Plot_Size_Numeric", "Sort_Key"], errors="ignore")
+    columns_to_drop = ["Plot_No_Numeric", "Street_No_Numeric", "Plot_Size_Numeric", "Sort_Key", "Sort_Key_Str"]
+    sorted_df = sorted_df.drop(
+        [col for col in columns_to_drop if col in sorted_df.columns], 
+        errors="ignore"
+    )
     return sorted_df
 
 def mark_listings_sold(rows_data):
