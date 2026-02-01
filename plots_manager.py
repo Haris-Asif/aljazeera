@@ -1522,13 +1522,98 @@ def show_plots_manager():
         else:
             st.info("Showing duplicate listings with matching Sector, Plot No, Street No, Plot Size but different Contact/Name/Demand")
             
+            # NEW: Color Grouped Table with Checkboxes
             if styled_duplicates_df is not None:
-                st.markdown("**Color Grouped View (Read-only)**")
+                st.markdown("**Color Grouped Table (With Checkboxes)**")
+                
+                # Create a copy of duplicates dataframe for display
+                color_grouped_df = duplicates_df.copy().reset_index(drop=True)
+                
+                # Add GroupKey if not present
+                if "GroupKey" not in color_grouped_df.columns:
+                    color_grouped_df["GroupKey"] = color_grouped_df.apply(
+                        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}|{str(row.get('Street No', '')).strip().upper()}|{str(row.get('Plot Size', '')).strip().upper()}", 
+                        axis=1
+                    )
+                
+                # Add checkbox column
+                color_grouped_df.insert(0, "Select", False)
+                color_grouped_df = safe_dataframe_for_display(color_grouped_df)
+                
+                # Create color mapping for groups
+                groups = color_grouped_df["GroupKey"].unique()
+                color_mapping = {group: f"hsl({int(i*360/len(groups))}, 70%, 80%)" for i, group in enumerate(groups)}
+                
+                # Function to apply color based on group
+                def apply_group_colors(row):
+                    group_key = row['GroupKey']
+                    if group_key in color_mapping:
+                        return [f"background-color: {color_mapping[group_key]}"] * len(row)
+                    return [""] * len(row)
+                
+                # Apply styling
+                styled_color_df = color_grouped_df.style.apply(apply_group_colors, axis=1)
+                
                 try:
-                    styled_html = styled_duplicates_df.to_html()
-                    st.markdown(f'<div style="height: 400px; overflow: auto; border: 1px solid #e6e9ef; border-radius: 0.5rem;">{styled_html}</div>', unsafe_allow_html=True)
-                except:
-                    st.warning("Preview too large to render with colors.")
+                    # Display with checkboxes and colors
+                    column_config = {
+                        "Select": st.column_config.CheckboxColumn(required=True),
+                        "SheetRowNum": st.column_config.NumberColumn(disabled=True),
+                        "GroupKey": st.column_config.TextColumn(disabled=True)
+                    }
+                    
+                    # Use data_editor for checkboxes
+                    edited_color_df = st.data_editor(
+                        styled_color_df.data,  # Get the underlying dataframe
+                        column_config=column_config,
+                        hide_index=True,
+                        width='stretch',
+                        disabled=color_grouped_df.columns.difference(["Select"]).tolist(),
+                        key="color_grouped_data_editor"
+                    )
+                    
+                    # Get selected indices
+                    selected_color_indices = edited_color_df[edited_color_df["Select"]].index.tolist()
+                    
+                    if selected_color_indices:
+                        st.success(f"**{len(selected_color_indices)} row(s) selected in color grouped table**")
+                        
+                        # Action buttons for color grouped table
+                        col1, col2, col3 = st.columns([1, 1, 1])
+                        with col1:
+                            edit_color_btn = st.button("✏️ Edit Selected", key="edit_color_grouped")
+                        with col2:
+                            hold_color_btn = st.button("⏸️ Hold", key="hold_color_grouped")
+                        with col3:
+                            delete_color_btn = st.button("🗑️ Delete Selected", type="primary", key="delete_color_grouped")
+                        
+                        if edit_color_btn:
+                            if len(selected_color_indices) == 1:
+                                st.session_state.edit_mode = True
+                                st.session_state.editing_row = edited_color_df.iloc[selected_color_indices[0]].to_dict()
+                                st.session_state.editing_table = "Color_Grouped_Duplicates"
+                                st.rerun()
+                            else:
+                                st.warning("Please select only one row to edit.")
+                        
+                        if hold_color_btn:
+                            selected_rows = [edited_color_df.iloc[idx] for idx in selected_color_indices]
+                            move_listings_to_hold(selected_rows, "Color_Grouped_Duplicates")
+                        
+                        if delete_color_btn:
+                            selected_rows = [edited_color_df.iloc[idx] for idx in selected_color_indices]
+                            row_nums = [int(row["SheetRowNum"]) for row in selected_rows]
+                            st.warning(f"🗑️ Deleting {len(row_nums)} selected row(s) from color grouped duplicates...")
+                            success = delete_rows_from_sheet(row_nums)
+                            if success:
+                                st.success(f"✅ Successfully deleted {len(row_nums)} row(s) from color grouped duplicates!")
+                                st.cache_data.clear()
+                                reset_filter_session_state_after_deletion()
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to delete rows. Please try again.")
+                except Exception as e:
+                    st.warning(f"Could not display color grouped table with checkboxes: {e}")
             
             st.markdown("---")
             st.markdown("**Actionable View (With Checkboxes)**")
@@ -1570,8 +1655,8 @@ def show_plots_manager():
             st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
             st.stop()
 
-        # UPDATED: Use the enhanced filtering logic from plots_manager (18).py
-        messages = generate_whatsapp_messages_with_enhanced_filtering(df_filtered)
+        # UPDATED: Generate WhatsApp messages with features appended
+        messages = generate_whatsapp_messages_with_features_appended(df_filtered)
         if not messages:
             st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots; No 'offer required' in demand; No duplicates with same Sector/Plot No/Street No/Plot Size/Demand.")
         else:
@@ -1584,8 +1669,8 @@ def show_plots_manager():
                 st.markdown(f'<a href="{link}" target="_blank" style="display: inline-block; padding: 0.75rem 1.5rem; background-color: #25D366; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 0.5rem 0;">📩 Send Message {i+1}</a>', unsafe_allow_html=True)
                 st.markdown("---")
 
-def generate_whatsapp_messages_with_enhanced_filtering(df):
-    """Generate WhatsApp messages with enhanced filtering criteria"""
+def generate_whatsapp_messages_with_features_appended(df):
+    """Generate WhatsApp messages with features appended at the end of each listing"""
     if df.empty:
         return []
     
@@ -1597,6 +1682,7 @@ def generate_whatsapp_messages_with_enhanced_filtering(df):
         size = str(row.get("Plot Size", "")).strip()
         price = str(row.get("Demand", "")).strip()
         street = str(row.get("Street No", "")).strip()
+        features = str(row.get("Features", "")).strip()
         
         if not (sector and plot_no and size and price):
             continue
@@ -1607,7 +1693,10 @@ def generate_whatsapp_messages_with_enhanced_filtering(df):
         if "offer required" in price.lower():
             continue
             
-        eligible_listings.append(row)
+        # Add features to the row for later use
+        row_dict = row.to_dict()
+        row_dict["Features_Text"] = features
+        eligible_listings.append(row_dict)
     
     if not eligible_listings:
         return []
@@ -1630,7 +1719,55 @@ def generate_whatsapp_messages_with_enhanced_filtering(df):
             filtered_listings.append(group.iloc[0])
     
     final_df = pd.DataFrame(filtered_listings)
-    return generate_whatsapp_messages(final_df)
+    
+    # Group by sector for message organization
+    final_df["Sector_Key"] = final_df["Sector"].apply(lambda x: str(x).strip())
+    final_df = final_df.sort_values(by=["Sector_Key", "Plot No"])
+    
+    messages = []
+    current_message = []
+    current_sector = None
+    
+    for i, row in final_df.iterrows():
+        sector = str(row.get("Sector", "")).strip()
+        plot_no = str(row.get("Plot No", "")).strip()
+        size = str(row.get("Plot Size", "")).strip()
+        price = str(row.get("Demand", "")).strip()
+        street = str(row.get("Street No", "")).strip()
+        features = str(row.get("Features_Text", row.get("Features", ""))).strip()
+        
+        # Start new sector header if needed
+        if sector != current_sector:
+            if current_message:
+                messages.append("\n".join(current_message))
+                current_message = []
+            if sector:
+                current_message.append(f"{sector}:")
+                current_sector = sector
+        
+        # Format listing based on whether it's I-15 or not
+        if "I-15" in sector:
+            # I-15 format: Include street number
+            if street:
+                line = f"P: {plot_no} | S: {size} | St: {street} | D: {price} | {features}"
+            else:
+                line = f"P: {plot_no} | S: {size} | D: {price} | {features}"
+        else:
+            # Non-I-15 format
+            line = f"P: {plot_no} | S: {size} | D: {price} | {features}"
+        
+        current_message.append(line)
+        
+        # Split into messages of 15 listings each
+        if len(current_message) >= 16:  # 1 sector header + 15 listings
+            messages.append("\n".join(current_message))
+            current_message = [f"{sector} (continued):"]
+    
+    # Add any remaining listings
+    if current_message:
+        messages.append("\n".join(current_message))
+    
+    return messages
 
 def sort_dataframe_with_i15_street_no(df):
     """Sort dataframe with special handling for I-15 sectors - sort by Street No"""
