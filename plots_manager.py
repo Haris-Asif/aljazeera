@@ -81,12 +81,18 @@ def get_dynamic_dealer_names(df, filters):
     # Apply price filter
     df_temp["ParsedPrice"] = df_temp["Demand"].apply(parse_price)
     if "ParsedPrice" in df_temp.columns:
-        df_temp_with_price = df_temp[df_temp["ParsedPrice"].notnull()]
-        if not df_temp_with_price.empty:
-            df_temp = df_temp_with_price[
-                (df_temp_with_price["ParsedPrice"] >= filters.get('price_from', 0)) & 
-                (df_temp_with_price["ParsedPrice"] <= filters.get('price_to', 1000))
+        # Split into valid and invalid price rows
+        valid_price_mask = df_temp["ParsedPrice"].notnull()
+        df_temp_valid = df_temp[valid_price_mask]
+        df_temp_invalid = df_temp[~valid_price_mask]
+        
+        if not df_temp_valid.empty:
+            df_temp_valid = df_temp_valid[
+                (df_temp_valid["ParsedPrice"] >= filters.get('price_from', 0)) & 
+                (df_temp_valid["ParsedPrice"] <= filters.get('price_to', 1000))
             ]
+        # Combine back valid and invalid rows
+        df_temp = pd.concat([df_temp_valid, df_temp_invalid], ignore_index=True)
     
     # Apply features filter (both client and dealer)
     if filters.get('selected_features_clients'):
@@ -204,10 +210,25 @@ def get_todays_unique_listings(df):
     # Make a copy to avoid modifying original
     df_copy = df.copy()
     
-    # Handle Timestamp conversion with error handling
+    # Handle Timestamp conversion with error handling - FIXED VERSION
     try:
-        # Convert Timestamp to datetime, coercing errors to NaT
-        df_copy['Date'] = pd.to_datetime(df_copy['Timestamp'], errors='coerce').dt.date
+        # Convert Timestamp column to datetime with proper format
+        if 'Timestamp' in df_copy.columns:
+            # Try multiple datetime formats to be safe
+            for fmt in ['%Y-%m-%d %H:%M:%S', '%Y/%m/%d %H:%M:%S', '%Y-%m-%d', '%d-%m-%Y %H:%M:%S']:
+                try:
+                    df_copy['Date'] = pd.to_datetime(df_copy['Timestamp'], format=fmt, errors='coerce').dt.date
+                    # If we successfully parsed any dates, break
+                    if df_copy['Date'].notna().any():
+                        break
+                except:
+                    continue
+            else:
+                # If all formats fail, use the default parser
+                df_copy['Date'] = pd.to_datetime(df_copy['Timestamp'], errors='coerce').dt.date
+        else:
+            # If no Timestamp column, return empty
+            return pd.DataFrame()
         
         # Drop rows where timestamp conversion failed
         df_copy = df_copy.dropna(subset=['Date'])
@@ -219,7 +240,7 @@ def get_todays_unique_listings(df):
         before_today_listings = df_copy[df_copy['Date'] < today].copy()
         
     except Exception as e:
-        # If timestamp conversion fails, try alternative approach
+        # If timestamp conversion fails, return empty dataframe
         st.warning(f"Timestamp conversion issue: {str(e)[:100]}")
         return pd.DataFrame()
     
@@ -261,10 +282,25 @@ def get_this_weeks_unique_listings(df):
     # Make a copy to avoid modifying original
     df_copy = df.copy()
     
-    # Handle Timestamp conversion with error handling
+    # Handle Timestamp conversion with error handling - FIXED VERSION
     try:
-        # Convert Timestamp to datetime, coercing errors to NaT
-        df_copy['Date'] = pd.to_datetime(df_copy['Timestamp'], errors='coerce').dt.date
+        # Convert Timestamp column to datetime with proper format
+        if 'Timestamp' in df_copy.columns:
+            # Try multiple datetime formats to be safe
+            for fmt in ['%Y-%m-%d %H:%M:%S', '%Y/%m/%d %H:%M:%S', '%Y-%m-%d', '%d-%m-%Y %H:%M:%S']:
+                try:
+                    df_copy['Date'] = pd.to_datetime(df_copy['Timestamp'], format=fmt, errors='coerce').dt.date
+                    # If we successfully parsed any dates, break
+                    if df_copy['Date'].notna().any():
+                        break
+                except:
+                    continue
+            else:
+                # If all formats fail, use the default parser
+                df_copy['Date'] = pd.to_datetime(df_copy['Timestamp'], errors='coerce').dt.date
+        else:
+            # If no Timestamp column, return empty
+            return pd.DataFrame()
         
         # Drop rows where timestamp conversion failed
         df_copy = df_copy.dropna(subset=['Date'])
@@ -276,7 +312,7 @@ def get_this_weeks_unique_listings(df):
         before_week_listings = df_copy[df_copy['Date'] < week_ago].copy()
         
     except Exception as e:
-        # If timestamp conversion fails, try alternative approach
+        # If timestamp conversion fails, return empty dataframe
         st.warning(f"Timestamp conversion issue: {str(e)[:100]}")
         return pd.DataFrame()
     
@@ -862,6 +898,9 @@ def show_plots_manager():
     sold_df = load_sold_data()
     hold_df = load_hold_data().fillna("")
     
+    # Debug: Show total listings loaded
+    st.caption(f"📊 Total listings loaded from Google Sheet: {len(df)}")
+    
     if not contacts_df.empty:
         contacts_df["SheetRowNum"] = [i + 2 for i in range(len(contacts_df))]
     
@@ -1143,9 +1182,19 @@ def show_plots_manager():
 
     df_filtered["ParsedPrice"] = df_filtered["Demand"].apply(parse_price)
     if "ParsedPrice" in df_filtered.columns:
-        df_filtered_with_price = df_filtered[df_filtered["ParsedPrice"].notnull()]
-        if not df_filtered_with_price.empty:
-            df_filtered = df_filtered_with_price[(df_filtered_with_price["ParsedPrice"] >= st.session_state.price_from) & (df_filtered_with_price["ParsedPrice"] <= st.session_state.price_to)]
+        # Split into valid and invalid price rows
+        valid_price_mask = df_filtered["ParsedPrice"].notnull()
+        df_filtered_valid = df_filtered[valid_price_mask]
+        df_filtered_invalid = df_filtered[~valid_price_mask]
+        
+        # Apply price filter only to valid price rows
+        if not df_filtered_valid.empty:
+            df_filtered_valid = df_filtered_valid[
+                (df_filtered_valid["ParsedPrice"] >= st.session_state.price_from) & 
+                (df_filtered_valid["ParsedPrice"] <= st.session_state.price_to)
+            ]
+        # Combine back valid and invalid rows
+        df_filtered = pd.concat([df_filtered_valid, df_filtered_invalid], ignore_index=True)
 
     # Apply client features filter
     if st.session_state.selected_features_clients:
