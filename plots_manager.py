@@ -1562,9 +1562,6 @@ def show_plots_manager():
         # Use existing utility but wrapped safely
         try:
             styled_duplicates_df, duplicates_df = create_duplicates_view_updated(df_filtered)
-            # --- FIX: If dataset is too large, drop style to prevent crash ---
-            if len(duplicates_df) > 50:
-                styled_duplicates_df = None
         except:
             styled_duplicates_df, duplicates_df = None, pd.DataFrame()
 
@@ -1579,33 +1576,31 @@ def show_plots_manager():
         else:
             st.info("Showing duplicate listings with matching Sector, Plot No, Street No, Plot Size but different Contact/Name/Demand")
             
-            # --- NEW: Read‑only color‑grouped table ---
-            if len(duplicates_df) <= 50:
-                # Create a copy with GroupKey
-                color_grouped_readonly = duplicates_df.copy()
-                if "GroupKey" not in color_grouped_readonly.columns:
-                    color_grouped_readonly["GroupKey"] = color_grouped_readonly.apply(
-                        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}|{str(row.get('Street No', '')).strip().upper()}|{str(row.get('Plot Size', '')).strip().upper()}", 
-                        axis=1
-                    )
-                groups = color_grouped_readonly["GroupKey"].unique()
-                color_mapping = {group: f"hsl({int(i*360/len(groups))}, 70%, 80%)" for i, group in enumerate(groups)}
-                
-                def apply_group_colors(row):
-                    return [f"background-color: {color_mapping[row['GroupKey']]}"] * len(row)
-                
-                styled_readonly = color_grouped_readonly.style.apply(apply_group_colors, axis=1)
-                st.markdown("**Color Grouped View (Read-only)**")
-                try:
-                    styled_html = styled_readonly.to_html()
-                    st.markdown(f'<div style="height: 400px; overflow: auto; border: 1px solid #e6e9ef; border-radius: 0.5rem;">{styled_html}</div>', unsafe_allow_html=True)
-                except Exception as e:
-                    st.warning("Could not render color grouped table.")
-            else:
-                st.warning("Too many duplicates to display color grouping. Showing actionable view only.")
+            # --- NEW: Read‑only color‑grouped table using Streamlit dataframe styling (no row limit) ---
+            # Create a copy with GroupKey
+            color_grouped_df = duplicates_df.copy()
+            if "GroupKey" not in color_grouped_df.columns:
+                color_grouped_df["GroupKey"] = color_grouped_df.apply(
+                    lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}|{str(row.get('Street No', '')).strip().upper()}|{str(row.get('Plot Size', '')).strip().upper()}", 
+                    axis=1
+                )
+            # Build color mapping
+            groups = color_grouped_df["GroupKey"].unique()
+            color_mapping = {group: f"background-color: hsl({int(i*360/len(groups))}, 70%, 80%)" for i, group in enumerate(groups)}
+            
+            # Apply styling
+            def apply_group_colors(row):
+                return [color_mapping[row['GroupKey']]] * len(row)
+            
+            styled_df = color_grouped_df.style.apply(apply_group_colors, axis=1)
+            
+            st.markdown("**Color Grouped View (Read-only)**")
+            # Display with Streamlit dataframe (virtualized, efficient)
+            st.dataframe(styled_df, use_container_width=True, height=400)
             
             st.markdown("---")
             st.markdown("**Actionable View (With Checkboxes)**")
+            # For duplicates, we keep the original I‑15 sorting (do not change)
             duplicates_df = sort_dataframe_with_i15_street_no(duplicates_df)
             display_table_with_actions(duplicates_df, "Duplicates", height=400, show_hold_button=True)
     else:
