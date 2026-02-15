@@ -118,9 +118,12 @@ def get_dynamic_dealer_names(df, filters):
     dealer_names, contact_to_name = build_name_map(df_temp)
     return dealer_names, contact_to_name
 
-def create_dealer_specific_duplicates_view(df, dealer_contacts):
-    """Create a view of duplicates specific to the selected dealer's listings"""
-    if df.empty or not dealer_contacts:
+def create_dealer_specific_duplicates_view(df, dealer_contacts=None):
+    """
+    Create a view of duplicates specific to the selected dealer's listings.
+    If dealer_contacts is None or empty, consider all listings.
+    """
+    if df.empty:
         return None, pd.DataFrame()
     
     # Create a normalized version of key fields for comparison
@@ -130,12 +133,15 @@ def create_dealer_specific_duplicates_view(df, dealer_contacts):
     df_normalized["Street_No_Norm"] = df_normalized["Street No"].astype(str).str.strip().str.upper()
     df_normalized["Plot_Size_Norm"] = df_normalized["Plot Size"].astype(str).str.strip().str.upper()
     
-    # Get listings from the selected dealer
-    dealer_listings = df_normalized[
-        df_normalized["Extracted Contact"].apply(
-            lambda x: any(contact in clean_number(str(x)) for contact in dealer_contacts)
-        )
-    ]
+    # Get listings from the selected dealer (or all if no dealer selected)
+    if dealer_contacts:
+        dealer_listings = df_normalized[
+            df_normalized["Extracted Contact"].apply(
+                lambda x: any(contact in clean_number(str(x)) for contact in dealer_contacts)
+            )
+        ]
+    else:
+        dealer_listings = df_normalized  # consider all listings
     
     if dealer_listings.empty:
         return None, pd.DataFrame()
@@ -660,15 +666,11 @@ def fuzzy_feature_match_enhanced(features_text, selected_features):
 
 def sort_by_sector_and_plot_size(df):
     """
-    Sort dataframe by Plot Size (ascending), then by Sector (ascending), 
-    then by Plot No (ascending).
-    
-    This ensures smallest plot size appears first, then within that plot size,
-    listings are arranged by sector (I-10/1,2,3,4 < I-11/1,2,3,4 < I-12/1,2,3,4 
-    < I-14/1,2,3,4 < I-15/1,2,3,4 < I-16/1,2,3,4), and within each sector,
-    listings are arranged by Plot No (ascending).
-    
-    Special handling for sectors: I-10, I-10/1, I-10/2, I-10/3, I-10/4, etc.
+    Sort dataframe by Sector (ascending), then Plot Size (ascending), 
+    then Plot No (ascending).
+
+    This ensures listings are arranged by Sector (I-10/1,2,3,4 < I-11/1,2,3,4 ...),
+    within each sector by Plot Size (smallest first), and within each plot size by Plot No.
     """
     if df.empty:
         return df
@@ -710,10 +712,7 @@ def sort_by_sector_and_plot_size(df):
         return 0
     
     # Create sort columns
-    # 1. Plot Size numeric value
-    sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(extract_plot_size_numeric)
-    
-    # 2. Sector sort key
+    # 1. Sector sort key
     def create_sector_sort_key(sector):
         sector_str = str(sector).strip().upper()
         
@@ -734,24 +733,26 @@ def sort_by_sector_and_plot_size(df):
     
     sorted_df["Sector_Sort_Key"] = sorted_df["Sector"].apply(create_sector_sort_key)
     
+    # 2. Plot Size numeric value
+    sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(extract_plot_size_numeric)
+    
     # 3. Plot No numeric value
     sorted_df["Plot_No_Numeric"] = sorted_df["Plot No"].apply(extract_plot_no_numeric)
     
-    # Sort by Plot Size first, then Sector, then Plot No
+    # Sort by Sector first, then Plot Size, then Plot No
     try:
         # Convert Sector_Sort_Key to string for stable sorting
-        # This handles the tuple sorting issue
         sorted_df["Sector_Sort_Str"] = sorted_df["Sector_Sort_Key"].astype(str)
         
         sorted_df = sorted_df.sort_values(
-            by=["Plot_Size_Numeric", "Sector_Sort_Str", "Plot_No_Numeric"], 
+            by=["Sector_Sort_Str", "Plot_Size_Numeric", "Plot_No_Numeric"], 
             ascending=[True, True, True]
         )
     except Exception as e:
         # Fallback to simple string sort if numeric sort fails
         st.warning(f"Could not sort by numeric values: {e}")
         sorted_df = sorted_df.sort_values(
-            by=["Plot Size", "Sector", "Plot No"], 
+            by=["Sector", "Plot Size", "Plot No"], 
             ascending=[True, True, True]
         )
     
@@ -763,6 +764,50 @@ def sort_by_sector_and_plot_size(df):
         errors="ignore"
     )
     
+    return sorted_df
+
+def sort_dataframe_with_i15_street_no(df):
+    """Sort dataframe with special handling for I-15 sectors - sort by Street No (kept for duplicates only)"""
+    if df.empty:
+        return df
+    
+    sorted_df = df.copy()
+    
+    if "Plot No" in sorted_df.columns:
+        sorted_df["Plot_No_Numeric"] = sorted_df["Plot No"].apply(_extract_int)
+    
+    if "Street No" in sorted_df.columns:
+        sorted_df["Street_No_Numeric"] = sorted_df["Street No"].apply(_extract_int)
+    
+    if "Plot Size" in sorted_df.columns:
+        sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(_extract_int)
+    
+    def get_sort_key(row):
+        sector = str(row.get("Sector", "")).strip()
+        if sector.startswith("I-15"):
+            street_no = _extract_int(row.get("Street No", ""))
+            plot_no = _extract_int(row.get("Plot No", ""))
+            return (sector, street_no, plot_no)
+        else:
+            plot_no = _extract_int(row.get("Plot No", ""))
+            street_no = _extract_int(row.get("Street No", ""))
+            return (sector, plot_no, street_no)
+    
+    sorted_df["Sort_Key"] = sorted_df.apply(get_sort_key, axis=1)
+    
+    try:
+        # Convert sort key to string for stable sorting
+        sorted_df["Sort_Key_Str"] = sorted_df["Sort_Key"].astype(str)
+        sorted_df = sorted_df.sort_values(by="Sort_Key_Str", ascending=True)
+    except Exception as e:
+        st.warning(f"Could not sort dataframe: {e}")
+        return df
+    
+    columns_to_drop = ["Plot_No_Numeric", "Street_No_Numeric", "Plot_Size_Numeric", "Sort_Key", "Sort_Key_Str"]
+    sorted_df = sorted_df.drop(
+        [col for col in columns_to_drop if col in sorted_df.columns], 
+        errors="ignore"
+    )
     return sorted_df
 
 def update_url_parameters():
@@ -1205,17 +1250,18 @@ def show_plots_manager():
         df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match_enhanced(x, st.session_state.selected_features_dealers))]
 
     df_filtered = filter_by_date(df_filtered, st.session_state.date_filter)
-    df_filtered_sorted_by_i15 = sort_dataframe_with_i15_street_no(df_filtered)
 
-    if "Timestamp" in df_filtered_sorted_by_i15.columns:
-        cols = [col for col in df_filtered_sorted_by_i15.columns if col != "Timestamp"] + ["Timestamp"]
-        df_filtered_sorted_by_i15 = df_filtered_sorted_by_i15[cols]
+    # --- REPLACED sort_dataframe_with_i15_street_no WITH sort_by_sector_and_plot_size ---
+    df_filtered_sorted = sort_by_sector_and_plot_size(df_filtered)
 
-    # Create the sorted-by-sector-plot-size version
+    if "Timestamp" in df_filtered_sorted.columns:
+        cols = [col for col in df_filtered_sorted.columns if col != "Timestamp"] + ["Timestamp"]
+        df_filtered_sorted = df_filtered_sorted[cols]
+
+    # The sorted-by-sector-plot-size table now uses the same function (already the new order)
     df_filtered_sorted_by_sector_size = sort_by_sector_and_plot_size(df_filtered)
 
-    # REMOVED: The is_valid_listing validation filter
-    display_main_table = df_filtered_sorted_by_i15.copy()
+    display_main_table = df_filtered_sorted.copy()
     
     st.subheader("📋 Filtered Listings")
     
@@ -1223,7 +1269,7 @@ def show_plots_manager():
         csv_data = display_main_table.to_csv(index=False)
         st.download_button(label="📥 Download Filtered Listings as CSV", data=csv_data, file_name=f"filtered_listings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv", key="download_csv")
     
-    # Calculate WhatsApp eligible count (keeping existing logic for info display)
+    # Calculate WhatsApp eligible count (keeping existing logic)
     whatsapp_eligible_count = 0
     for _, row in df_filtered.iterrows():
         sector = str(row.get("Sector", "")).strip()
@@ -1258,17 +1304,15 @@ def show_plots_manager():
     else:
         st.info("No listings match your filters")
     
-    # NEW TABLE: Sorted by Sector and Plot Size
+    # NEW TABLE: Sorted by Sector and Plot Size (already using new order)
     st.markdown("---")
     st.subheader("📊 Listings Sorted by Sector & Plot Size (Ascending)")
     
-    # Apply the same filtering to the sorted version (NO validation filter)
     sorted_by_sector_size_table = df_filtered_sorted_by_sector_size.copy()
     
     if not sorted_by_sector_size_table.empty:
-        st.info(f"Showing {len(sorted_by_sector_size_table)} listings sorted by Plot Size (ascending), then Sector (ascending), then Plot No (ascending)")
+        st.info(f"Showing {len(sorted_by_sector_size_table)} listings sorted by Sector (ascending), then Plot Size (ascending), then Plot No (ascending)")
         
-        # Download button for sorted table
         csv_data_sorted = sorted_by_sector_size_table.to_csv(index=False)
         st.download_button(
             label="📥 Download Sorted Listings as CSV", 
@@ -1313,7 +1357,8 @@ def show_plots_manager():
                 ~(hold_df_filtered["Extracted Name"].isna() | (hold_df_filtered["Extracted Name"] == ""))
             ]
     
-    hold_df_filtered = sort_dataframe_with_i15_street_no(hold_df_filtered)
+    # --- REPLACED sort_dataframe_with_i15_street_no WITH sort_by_sector_and_plot_size ---
+    hold_df_filtered = sort_by_sector_and_plot_size(hold_df_filtered)
     
     if not hold_df_filtered.empty:
         st.info(f"Showing {len(hold_df_filtered)} listings on hold matching your filters")
@@ -1342,7 +1387,8 @@ def show_plots_manager():
                 ~(todays_unique_filtered["Extracted Name"].isna() | (todays_unique_filtered["Extracted Name"] == ""))
             ]
         
-        todays_unique_filtered = sort_dataframe_with_i15_street_no(todays_unique_filtered)
+        # --- REPLACED sort_dataframe_with_i15_street_no WITH sort_by_sector_and_plot_size ---
+        todays_unique_filtered = sort_by_sector_and_plot_size(todays_unique_filtered)
         st.info(f"Found {len(todays_unique_filtered)} unique listings added today with new Sector & Plot No combinations")
         display_table_with_actions(todays_unique_filtered, "Today_Unique", height=300, show_hold_button=True)
     else:
@@ -1369,45 +1415,54 @@ def show_plots_manager():
                 ~(weeks_unique_filtered["Extracted Name"].isna() | (weeks_unique_filtered["Extracted Name"] == ""))
             ]
         
-        weeks_unique_filtered = sort_dataframe_with_i15_street_no(weeks_unique_filtered)
+        # --- REPLACED sort_dataframe_with_i15_street_no WITH sort_by_sector_and_plot_size ---
+        weeks_unique_filtered = sort_by_sector_and_plot_size(weeks_unique_filtered)
         st.info(f"Found {len(weeks_unique_filtered)} unique listings added in the last 7 days with new Sector & Plot No combinations")
         display_table_with_actions(weeks_unique_filtered, "Week_Unique", height=300, show_hold_button=True)
     else:
         st.info("No unique listings found for this week")
     
+    # --- MOVED DEALER-SPECIFIC DUPLICATES OUTSIDE THE DEALER CONDITIONAL ---
+    st.markdown("---")
+    st.subheader("👥 Dealer-Specific Duplicates")
+    
+    # Determine contacts to use: if dealer selected, use that dealer's contacts; otherwise None (all listings)
     if st.session_state.selected_dealer:
-        st.markdown("---")
-        st.subheader("👥 Dealer-Specific Duplicates")
-        
         actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
         selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
-        
-        styled_dealer_duplicates, dealer_duplicates_df = create_dealer_specific_duplicates_view(df, selected_contacts)
-        
-        if not st.session_state.missing_contact_filter and not dealer_duplicates_df.empty:
-            dealer_duplicates_df = dealer_duplicates_df[
-                ~(dealer_duplicates_df["Extracted Contact"].isna() | (dealer_duplicates_df["Extracted Contact"] == "")) | 
-                ~(dealer_duplicates_df["Extracted Name"].isna() | (dealer_duplicates_df["Extracted Name"] == ""))
-            ]
-        
-        if not dealer_duplicates_df.empty:
+    else:
+        selected_contacts = None  # means consider all listings
+    
+    styled_dealer_duplicates, dealer_duplicates_df = create_dealer_specific_duplicates_view(df, selected_contacts)
+    
+    if not st.session_state.missing_contact_filter and not dealer_duplicates_df.empty:
+        dealer_duplicates_df = dealer_duplicates_df[
+            ~(dealer_duplicates_df["Extracted Contact"].isna() | (dealer_duplicates_df["Extracted Contact"] == "")) | 
+            ~(dealer_duplicates_df["Extracted Name"].isna() | (dealer_duplicates_df["Extracted Name"] == ""))
+        ]
+    
+    if not dealer_duplicates_df.empty:
+        if st.session_state.selected_dealer:
             st.info(f"Showing duplicate listings for dealer **{actual_name}** - matching Sector, Plot No, Street No, Plot Size but different Contacts/Names")
-            
-            # --- FIX: Avoid rendering HTML if None is returned (Too many rows) ---
-            if styled_dealer_duplicates is not None:
-                st.markdown("**Color Grouped View (Read-only)**")
-                try:
-                    styled_html = styled_dealer_duplicates.to_html()
-                    st.markdown(f'<div style="height: 400px; overflow: auto; border: 1px solid #e6e9ef; border-radius: 0.5rem;">{styled_html}</div>', unsafe_allow_html=True)
-                except:
-                    st.warning("Preview too large to render with colors.")
-            
-            st.markdown("---")
-            st.markdown("**Actionable View (With Checkboxes)**")
-            dealer_duplicates_df = sort_dataframe_with_i15_street_no(dealer_duplicates_df)
-            display_table_with_actions(dealer_duplicates_df, "Dealer_Duplicates", height=400, show_hold_button=True)
         else:
-            st.info(f"No dealer-specific duplicates found for **{actual_name}**")
+            st.info("Showing all duplicate listings (color‑grouped by key)")
+        
+        # --- FIX: Avoid rendering HTML if None is returned (Too many rows) ---
+        if styled_dealer_duplicates is not None:
+            st.markdown("**Color Grouped View (Read-only)**")
+            try:
+                styled_html = styled_dealer_duplicates.to_html()
+                st.markdown(f'<div style="height: 400px; overflow: auto; border: 1px solid #e6e9ef; border-radius: 0.5rem;">{styled_html}</div>', unsafe_allow_html=True)
+            except:
+                st.warning("Preview too large to render with colors.")
+        
+        st.markdown("---")
+        st.markdown("**Actionable View (With Checkboxes)**")
+        # For duplicates, we keep the original I‑15 sorting (do not change)
+        dealer_duplicates_df = sort_dataframe_with_i15_street_no(dealer_duplicates_df)
+        display_table_with_actions(dealer_duplicates_df, "Dealer_Duplicates", height=400, show_hold_button=True)
+    else:
+        st.info("No dealer-specific duplicates found")
     
     st.markdown("---")
     st.subheader("✅ Sold Listings (Filtered)")
@@ -1436,7 +1491,8 @@ def show_plots_manager():
                 ~(sold_df_filtered["Extracted Name"].isna() | (sold_df_filtered["Extracted Name"] == ""))
             ]
     
-    sold_df_filtered = sort_dataframe_with_i15_street_no(sold_df_filtered)
+    # --- REPLACED sort_dataframe_with_i15_street_no WITH sort_by_sector_and_plot_size ---
+    sold_df_filtered = sort_by_sector_and_plot_size(sold_df_filtered)
     
     if not sold_df_filtered.empty:
         st.info(f"Showing {len(sold_df_filtered)} sold listings matching your filters")
@@ -1488,7 +1544,8 @@ def show_plots_manager():
         if not incomplete_df.empty:
             incomplete_df["Extracted Name"] = incomplete_df["Extracted Name"].fillna("")
             incomplete_df = incomplete_df.sort_values(by="Extracted Name")
-            incomplete_df = sort_dataframe_with_i15_street_no(incomplete_df)
+            # --- REPLACED sort_dataframe_with_i15_street_no WITH sort_by_sector_and_plot_size ---
+            incomplete_df = sort_by_sector_and_plot_size(incomplete_df)
         
         if not incomplete_df.empty:
             st.info(f"Found {len(incomplete_df)} listings with missing information")
@@ -1617,6 +1674,7 @@ def show_plots_manager():
             
             st.markdown("---")
             st.markdown("**Actionable View (With Checkboxes)**")
+            # For duplicates, we keep the original I‑15 sorting (do not change)
             duplicates_df = sort_dataframe_with_i15_street_no(duplicates_df)
             display_table_with_actions(duplicates_df, "Duplicates", height=400, show_hold_button=True)
     else:
@@ -1655,7 +1713,7 @@ def show_plots_manager():
             st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
             st.stop()
 
-        # UPDATED: Generate WhatsApp messages with features appended
+        # UPDATED: Generate WhatsApp messages with features appended and blank lines
         messages = generate_whatsapp_messages_with_features_appended(df_filtered)
         if not messages:
             st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots; No 'offer required' in demand; No duplicates with same Sector/Plot No/Street No/Plot Size/Demand.")
@@ -1670,7 +1728,8 @@ def show_plots_manager():
                 st.markdown("---")
 
 def generate_whatsapp_messages_with_features_appended(df):
-    """Generate WhatsApp messages with features appended at the end of each listing"""
+    """Generate WhatsApp messages with features appended at the end of each listing.
+       For I-15 sectors, street number appears first. Listings are separated by a blank line."""
     if df.empty:
         return []
     
@@ -1739,17 +1798,19 @@ def generate_whatsapp_messages_with_features_appended(df):
         # Start new sector header if needed
         if sector != current_sector:
             if current_message:
-                messages.append("\n".join(current_message))
+                # Join listings with double newline (blank line between listings)
+                messages.append("\n\n".join(current_message))
                 current_message = []
             if sector:
+                # Sector header line (no blank line after header yet – will be added when joined)
                 current_message.append(f"{sector}:")
                 current_sector = sector
         
-        # Format listing based on whether it's I-15 or not
-        if "I-15" in sector:
-            # I-15 format: Include street number
+        # Format listing based on sector
+        if sector.startswith("I-15"):
+            # I-15 format: street first, then plot, size, demand, features
             if street:
-                line = f"P: {plot_no} | S: {size} | St: {street} | D: {price} | {features}"
+                line = f"St: {street} | P: {plot_no} | S: {size} | D: {price} | {features}"
             else:
                 line = f"P: {plot_no} | S: {size} | D: {price} | {features}"
         else:
@@ -1758,60 +1819,17 @@ def generate_whatsapp_messages_with_features_appended(df):
         
         current_message.append(line)
         
-        # Split into messages of 15 listings each
+        # Split into messages of 15 listings each (header counts as one line)
+        # Header + 15 listings would be 16 lines; we want to keep messages manageable
         if len(current_message) >= 16:  # 1 sector header + 15 listings
-            messages.append("\n".join(current_message))
+            messages.append("\n\n".join(current_message))
             current_message = [f"{sector} (continued):"]
     
     # Add any remaining listings
     if current_message:
-        messages.append("\n".join(current_message))
+        messages.append("\n\n".join(current_message))
     
     return messages
-
-def sort_dataframe_with_i15_street_no(df):
-    """Sort dataframe with special handling for I-15 sectors - sort by Street No"""
-    if df.empty:
-        return df
-    
-    sorted_df = df.copy()
-    
-    if "Plot No" in sorted_df.columns:
-        sorted_df["Plot_No_Numeric"] = sorted_df["Plot No"].apply(_extract_int)
-    
-    if "Street No" in sorted_df.columns:
-        sorted_df["Street_No_Numeric"] = sorted_df["Street No"].apply(_extract_int)
-    
-    if "Plot Size" in sorted_df.columns:
-        sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(_extract_int)
-    
-    def get_sort_key(row):
-        sector = str(row.get("Sector", "")).strip()
-        if sector.startswith("I-15"):
-            street_no = _extract_int(row.get("Street No", ""))
-            plot_no = _extract_int(row.get("Plot No", ""))
-            return (sector, street_no, plot_no)
-        else:
-            plot_no = _extract_int(row.get("Plot No", ""))
-            street_no = _extract_int(row.get("Street No", ""))
-            return (sector, plot_no, street_no)
-    
-    sorted_df["Sort_Key"] = sorted_df.apply(get_sort_key, axis=1)
-    
-    try:
-        # Convert sort key to string for stable sorting
-        sorted_df["Sort_Key_Str"] = sorted_df["Sort_Key"].astype(str)
-        sorted_df = sorted_df.sort_values(by="Sort_Key_Str", ascending=True)
-    except Exception as e:
-        st.warning(f"Could not sort dataframe: {e}")
-        return df
-    
-    columns_to_drop = ["Plot_No_Numeric", "Street_No_Numeric", "Plot_Size_Numeric", "Sort_Key", "Sort_Key_Str"]
-    sorted_df = sorted_df.drop(
-        [col for col in columns_to_drop if col in sorted_df.columns], 
-        errors="ignore"
-    )
-    return sorted_df
 
 def mark_listings_sold(rows_data):
     """Mark selected listings as sold by moving them to Sold sheet and removing from Plots"""
