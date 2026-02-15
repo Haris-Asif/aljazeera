@@ -1772,7 +1772,8 @@ def generate_whatsapp_messages_with_features_appended(df):
     filtered_listings = []
     for key, group in eligible_df.groupby("DuplicateKey"):
         if len(group) > 1:
-            lowest_price_row = group.loc[group["ParsedPrice"].idxmin()]
+            # Safer: sort by ParsedPrice and take the first row (lowest price)
+            lowest_price_row = group.sort_values("ParsedPrice").iloc[0]
             filtered_listings.append(lowest_price_row)
         else:
             filtered_listings.append(group.iloc[0])
