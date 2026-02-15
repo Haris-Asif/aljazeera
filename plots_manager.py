@@ -186,13 +186,8 @@ def create_dealer_specific_duplicates_view(df, dealer_contacts=None):
         axis=1, 
         errors="ignore"
     )
-    
-    # --- PERFORMANCE FIX: Limit styling row count ---
-    # Attempting to style and render HTML for hundreds of rows crashes the app
-    if len(duplicates_df) > 50:
-        # If too many rows, return just the dataframe, no styled object to prevent OOM
-        return None, duplicates_df
 
+    # --- PERFORMANCE NOTE: Removed row limit to allow color grouping even with many rows ---
     # Create styled version with color grouping
     try:
         groups = duplicates_df["GroupKey"].unique()
@@ -1579,14 +1574,98 @@ def show_plots_manager():
         else:
             st.info("Showing duplicate listings with matching Sector, Plot No, Street No, Plot Size but different Contact/Name/Demand")
             
-            # --- FIX: Display a read‑only color‑grouped HTML table (like dealer duplicates) ---
+            # NEW: Color Grouped Table with Checkboxes
             if styled_duplicates_df is not None:
-                st.markdown("**Color Grouped View (Read-only)**")
+                st.markdown("**Color Grouped Table (With Checkboxes)**")
+                
+                # Create a copy of duplicates dataframe for display
+                color_grouped_df = duplicates_df.copy().reset_index(drop=True)
+                
+                # Add GroupKey if not present
+                if "GroupKey" not in color_grouped_df.columns:
+                    color_grouped_df["GroupKey"] = color_grouped_df.apply(
+                        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}|{str(row.get('Street No', '')).strip().upper()}|{str(row.get('Plot Size', '')).strip().upper()}", 
+                        axis=1
+                    )
+                
+                # Add checkbox column
+                color_grouped_df.insert(0, "Select", False)
+                color_grouped_df = safe_dataframe_for_display(color_grouped_df)
+                
+                # Create color mapping for groups
+                groups = color_grouped_df["GroupKey"].unique()
+                color_mapping = {group: f"hsl({int(i*360/len(groups))}, 70%, 80%)" for i, group in enumerate(groups)}
+                
+                # Function to apply color based on group
+                def apply_group_colors(row):
+                    group_key = row['GroupKey']
+                    if group_key in color_mapping:
+                        return [f"background-color: {color_mapping[group_key]}"] * len(row)
+                    return [""] * len(row)
+                
+                # Apply styling
+                styled_color_df = color_grouped_df.style.apply(apply_group_colors, axis=1)
+                
                 try:
-                    styled_html = styled_duplicates_df.to_html()
-                    st.markdown(f'<div style="height: 400px; overflow: auto; border: 1px solid #e6e9ef; border-radius: 0.5rem;">{styled_html}</div>', unsafe_allow_html=True)
-                except:
-                    st.warning("Preview too large to render with colors.")
+                    # Display with checkboxes and colors
+                    column_config = {
+                        "Select": st.column_config.CheckboxColumn(required=True),
+                        "SheetRowNum": st.column_config.NumberColumn(disabled=True),
+                        "GroupKey": st.column_config.TextColumn(disabled=True)
+                    }
+                    
+                    # Use data_editor for checkboxes
+                    edited_color_df = st.data_editor(
+                        styled_color_df.data,  # Get the underlying dataframe
+                        column_config=column_config,
+                        hide_index=True,
+                        width='stretch',
+                        disabled=color_grouped_df.columns.difference(["Select"]).tolist(),
+                        key="color_grouped_data_editor"
+                    )
+                    
+                    # Get selected indices
+                    selected_color_indices = edited_color_df[edited_color_df["Select"]].index.tolist()
+                    
+                    if selected_color_indices:
+                        st.success(f"**{len(selected_color_indices)} row(s) selected in color grouped table**")
+                        
+                        # Action buttons for color grouped table
+                        col1, col2, col3 = st.columns([1, 1, 1])
+                        with col1:
+                            edit_color_btn = st.button("✏️ Edit Selected", key="edit_color_grouped")
+                        with col2:
+                            hold_color_btn = st.button("⏸️ Hold", key="hold_color_grouped")
+                        with col3:
+                            delete_color_btn = st.button("🗑️ Delete Selected", type="primary", key="delete_color_grouped")
+                        
+                        if edit_color_btn:
+                            if len(selected_color_indices) == 1:
+                                st.session_state.edit_mode = True
+                                st.session_state.editing_row = edited_color_df.iloc[selected_color_indices[0]].to_dict()
+                                st.session_state.editing_table = "Color_Grouped_Duplicates"
+                                st.rerun()
+                            else:
+                                st.warning("Please select only one row to edit.")
+                        
+                        if hold_color_btn:
+                            selected_rows = [edited_color_df.iloc[idx] for idx in selected_color_indices]
+                            move_listings_to_hold(selected_rows, "Color_Grouped_Duplicates")
+                        
+                        if delete_color_btn:
+                            selected_rows = [edited_color_df.iloc[idx] for idx in selected_color_indices]
+                            row_nums = [int(row["SheetRowNum"]) for row in selected_rows]
+                            st.warning(f"🗑️ Deleting {len(row_nums)} selected row(s) from color grouped duplicates...")
+                            success = delete_rows_from_sheet(row_nums)
+                            if success:
+                                st.success(f"✅ Successfully deleted {len(row_nums)} row(s) from color grouped duplicates!")
+                                st.cache_data.clear()
+                                reset_filter_session_state_after_deletion()
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to delete rows. Please try again.")
+                except Exception as e:
+                    st.warning(f"Could not display color grouped table with checkboxes: {e}")
             
             st.markdown("---")
             st.markdown("**Actionable View (With Checkboxes)**")
