@@ -931,7 +931,7 @@ def parse_url_parameters():
     # Mark that filters were loaded from URL
     st.session_state.filters_from_url = True
 
-def color_grouped_html_table(df, group_col='GroupKey', max_rows=500):
+def color_grouped_html_table(df, group_col='GroupKey', max_rows=5000):
     """
     Generate an HTML table with rows colored by group.
     If df has more than max_rows, return None and a warning flag.
@@ -1620,8 +1620,8 @@ def show_plots_manager():
         else:
             st.info("Showing duplicate listings with matching Sector, Plot No, Street No, Plot Size but different Contact/Name/Demand")
             
-            # --- NEW: Color‑grouped HTML table (read‑only) ---
-            color_html, too_many = color_grouped_html_table(duplicates_df, max_rows=500)
+            # --- NEW: Color‑grouped HTML table (read‑only) with increased limit ---
+            color_html, too_many = color_grouped_html_table(duplicates_df, max_rows=5000)
             if too_many:
                 st.warning(f"Too many duplicates ({len(duplicates_df)}) to display color grouping. Showing actionable view only.")
             elif color_html:
