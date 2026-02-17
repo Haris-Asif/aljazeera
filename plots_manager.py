@@ -41,8 +41,10 @@ except ImportError:
         st.error("Hold functionality not available")
         return False
 
+# Add caching to dealer name function to avoid redundant filtering
+@st.cache_data(ttl=300, show_spinner="Updating dealer names...")
 def get_dynamic_dealer_names(df, filters):
-    """Get dealer names based on current filter settings"""
+    """Get dealer names based on current filter settings (cached for performance)"""
     df_temp = df.copy()
     
     # Apply all current filters except dealer filter
@@ -63,12 +65,14 @@ def get_dynamic_dealer_names(df, filters):
             df_temp = df_temp[df_temp["Plot Size"].str.contains(plot_size_filter, case=False, na=False)]
     
     if filters.get('street_filter'):
-        street_pattern = re.compile(re.escape(filters['street_filter']), re.IGNORECASE)
-        df_temp = df_temp[df_temp["Street No"].apply(lambda x: bool(street_pattern.search(str(x))))]
+        street_pattern = filters['street_filter']
+        # Vectorized string contains (much faster than apply)
+        df_temp = df_temp[df_temp["Street No"].astype(str).str.contains(street_pattern, case=False, na=False, regex=True)]
     
     if filters.get('plot_no_filter'):
-        plot_pattern = re.compile(re.escape(filters['plot_no_filter']), re.IGNORECASE)
-        df_temp = df_temp[df_temp["Plot No"].apply(lambda x: bool(plot_pattern.search(str(x))))]
+        plot_pattern = filters['plot_no_filter']
+        # Vectorized string contains
+        df_temp = df_temp[df_temp["Plot No"].astype(str).str.contains(plot_pattern, case=False, na=False, regex=True)]
     
     if filters.get('contact_filter'):
         cnum = clean_number(filters['contact_filter'])
@@ -81,7 +85,6 @@ def get_dynamic_dealer_names(df, filters):
     # Apply price filter
     df_temp["ParsedPrice"] = df_temp["Demand"].apply(parse_price)
     if "ParsedPrice" in df_temp.columns:
-        # Split into valid and invalid price rows
         valid_price_mask = df_temp["ParsedPrice"].notnull()
         df_temp_valid = df_temp[valid_price_mask]
         df_temp_invalid = df_temp[~valid_price_mask]
@@ -91,14 +94,12 @@ def get_dynamic_dealer_names(df, filters):
                 (df_temp_valid["ParsedPrice"] >= filters.get('price_from', 0)) & 
                 (df_temp_valid["ParsedPrice"] <= filters.get('price_to', 1000))
             ]
-        # Combine back valid and invalid rows
         df_temp = pd.concat([df_temp_valid, df_temp_invalid], ignore_index=True)
     
     # Apply features filter (both client and dealer)
     if filters.get('selected_features_clients'):
         df_temp = df_temp[df_temp["Features"].apply(lambda x: fuzzy_feature_match(x, filters['selected_features_clients']))]
     
-    # Apply dealer features filter
     if filters.get('selected_features_dealers'):
         df_temp = df_temp[df_temp["Features"].apply(lambda x: fuzzy_feature_match(x, filters['selected_features_dealers']))]
     
@@ -188,9 +189,7 @@ def create_dealer_specific_duplicates_view(df, dealer_contacts=None):
     )
     
     # --- PERFORMANCE FIX: Limit styling row count ---
-    # Attempting to style and render HTML for hundreds of rows crashes the app
     if len(duplicates_df) > 50:
-        # If too many rows, return just the dataframe, no styled object to prevent OOM
         return None, duplicates_df
 
     # Create styled version with color grouping
@@ -216,27 +215,21 @@ def get_todays_unique_listings(df):
     # Make a copy to avoid modifying original
     df_copy = df.copy()
     
-    # Handle Timestamp conversion with error handling - FIXED VERSION
+    # Handle Timestamp conversion with error handling
     try:
-        # Convert Timestamp column to datetime with proper format
         if 'Timestamp' in df_copy.columns:
-            # Try multiple datetime formats to be safe
             for fmt in ['%Y-%m-%d %H:%M:%S', '%Y/%m/%d %H:%M:%S', '%Y-%m-%d', '%d-%m-%Y %H:%M:%S']:
                 try:
                     df_copy['Date'] = pd.to_datetime(df_copy['Timestamp'], format=fmt, errors='coerce').dt.date
-                    # If we successfully parsed any dates, break
                     if df_copy['Date'].notna().any():
                         break
                 except:
                     continue
             else:
-                # If all formats fail, use the default parser
                 df_copy['Date'] = pd.to_datetime(df_copy['Timestamp'], errors='coerce').dt.date
         else:
-            # If no Timestamp column, return empty
             return pd.DataFrame()
         
-        # Drop rows where timestamp conversion failed
         df_copy = df_copy.dropna(subset=['Date'])
         
         if df_copy.empty:
@@ -246,28 +239,19 @@ def get_todays_unique_listings(df):
         before_today_listings = df_copy[df_copy['Date'] < today].copy()
         
     except Exception as e:
-        # If timestamp conversion fails, return empty dataframe
         st.warning(f"Timestamp conversion issue: {str(e)[:100]}")
         return pd.DataFrame()
     
     if today_listings.empty:
         return pd.DataFrame()
     
-    # Create combination keys
-    today_listings["CombinationKey"] = today_listings.apply(
-        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
-        axis=1
-    )
-    
-    before_today_listings["CombinationKey"] = before_today_listings.apply(
-        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
-        axis=1
-    )
+    # Create combination keys (vectorized)
+    today_listings["CombinationKey"] = today_listings["Sector"].astype(str).str.strip().str.upper() + "|" + today_listings["Plot No"].astype(str).str.strip().str.upper()
+    before_today_listings["CombinationKey"] = before_today_listings["Sector"].astype(str).str.strip().str.upper() + "|" + before_today_listings["Plot No"].astype(str).str.strip().str.upper()
     
     existing_keys = set(before_today_listings["CombinationKey"].unique())
     unique_today_listings = today_listings[~today_listings["CombinationKey"].isin(existing_keys)]
     
-    # Drop temporary columns
     columns_to_drop = ["Date", "CombinationKey"]
     unique_today_listings = unique_today_listings.drop(
         [col for col in columns_to_drop if col in unique_today_listings.columns], 
@@ -285,30 +269,22 @@ def get_this_weeks_unique_listings(df):
     today = datetime.now().date()
     week_ago = today - timedelta(days=7)
     
-    # Make a copy to avoid modifying original
     df_copy = df.copy()
     
-    # Handle Timestamp conversion with error handling - FIXED VERSION
     try:
-        # Convert Timestamp column to datetime with proper format
         if 'Timestamp' in df_copy.columns:
-            # Try multiple datetime formats to be safe
             for fmt in ['%Y-%m-%d %H:%M:%S', '%Y/%m/%d %H:%M:%S', '%Y-%m-%d', '%d-%m-%Y %H:%M:%S']:
                 try:
                     df_copy['Date'] = pd.to_datetime(df_copy['Timestamp'], format=fmt, errors='coerce').dt.date
-                    # If we successfully parsed any dates, break
                     if df_copy['Date'].notna().any():
                         break
                 except:
                     continue
             else:
-                # If all formats fail, use the default parser
                 df_copy['Date'] = pd.to_datetime(df_copy['Timestamp'], errors='coerce').dt.date
         else:
-            # If no Timestamp column, return empty
             return pd.DataFrame()
         
-        # Drop rows where timestamp conversion failed
         df_copy = df_copy.dropna(subset=['Date'])
         
         if df_copy.empty:
@@ -318,28 +294,18 @@ def get_this_weeks_unique_listings(df):
         before_week_listings = df_copy[df_copy['Date'] < week_ago].copy()
         
     except Exception as e:
-        # If timestamp conversion fails, return empty dataframe
         st.warning(f"Timestamp conversion issue: {str(e)[:100]}")
         return pd.DataFrame()
     
     if this_week_listings.empty:
         return pd.DataFrame()
     
-    # Create combination keys
-    this_week_listings["CombinationKey"] = this_week_listings.apply(
-        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
-        axis=1
-    )
-    
-    before_week_listings["CombinationKey"] = before_week_listings.apply(
-        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}", 
-        axis=1
-    )
+    this_week_listings["CombinationKey"] = this_week_listings["Sector"].astype(str).str.strip().str.upper() + "|" + this_week_listings["Plot No"].astype(str).str.strip().str.upper()
+    before_week_listings["CombinationKey"] = before_week_listings["Sector"].astype(str).str.strip().str.upper() + "|" + before_week_listings["Plot No"].astype(str).str.strip().str.upper()
     
     existing_keys = set(before_week_listings["CombinationKey"].unique())
     unique_week_listings = this_week_listings[~this_week_listings["CombinationKey"].isin(existing_keys)]
     
-    # Drop temporary columns
     columns_to_drop = ["Date", "CombinationKey"]
     unique_week_listings = unique_week_listings.drop(
         [col for col in columns_to_drop if col in unique_week_listings.columns], 
@@ -445,9 +411,7 @@ def display_table_with_actions(df, table_name, height=300, show_hold_button=True
             success = delete_rows_from_sheet(row_nums)
             if success:
                 st.success(f"✅ Successfully deleted {len(row_nums)} row(s) from {table_name}!")
-                # Clear cache and reset filters to prevent stale data issues
                 st.cache_data.clear()
-                # Reset filter session state to prevent multiselect errors
                 reset_filter_session_state_after_deletion()
                 st.rerun()
             else:
@@ -525,25 +489,20 @@ def generate_dealer_contacts_pdf(dealer_names, contact_to_name, contacts_df):
 
 def reset_filter_session_state_after_deletion():
     """Reset filter session state after deletion to prevent multiselect errors"""
-    # Reset multiselect filters to only include values that still exist
     df = load_plot_data().fillna("")
     
-    # Update sector filter
     if 'sector_filter' in st.session_state:
         all_sectors = sorted([str(s) for s in df["Sector"].dropna().unique() if s and str(s).strip() != ""])
         st.session_state.sector_filter = [s for s in st.session_state.sector_filter if s in all_sectors]
     
-    # Update plot size filter
     if 'plot_size_filter' in st.session_state:
         all_plot_sizes = sorted([str(s) for s in df["Plot Size"].dropna().unique() if s and str(s).strip() != ""])
         st.session_state.plot_size_filter = [s for s in st.session_state.plot_size_filter if s in all_plot_sizes]
     
-    # Update features filter (clients)
     if 'selected_features_clients' in st.session_state:
         fixed_client_features = get_client_feature_options()
         st.session_state.selected_features_clients = [f for f in st.session_state.selected_features_clients if f in fixed_client_features]
     
-    # Update features filter (dealers)
     if 'selected_features_dealers' in st.session_state:
         fixed_dealer_features = get_dealer_feature_options()
         st.session_state.selected_features_dealers = [f for f in st.session_state.selected_features_dealers if f in fixed_dealer_features]
@@ -598,28 +557,18 @@ def fuzzy_feature_match_enhanced(features_text, selected_features):
     """
     Enhanced feature matching that checks if any of the selected features 
     (or their variants) are present in the features text.
-    
-    Args:
-        features_text: String containing features
-        selected_features: List of selected feature keywords
-    
-    Returns:
-        Boolean indicating if any match is found
     """
     if not features_text or not selected_features:
         return False
     
     features_text = str(features_text).lower()
     
-    # Check each selected feature
     for feature in selected_features:
         feature_lower = feature.lower()
         
-        # Direct match
         if feature_lower in features_text:
             return True
         
-        # Handle common variants
         variants = {
             "ssr": ["south service road", "south service"],
             "esr": ["east service road", "east service"],
@@ -656,7 +605,6 @@ def fuzzy_feature_match_enhanced(features_text, selected_features):
             "basement": ["basement available", "with basement"]
         }
         
-        # Check for variants
         if feature_lower in variants:
             for variant in variants[feature_lower]:
                 if variant in features_text:
@@ -668,95 +616,65 @@ def sort_by_sector_and_plot_size(df):
     """
     Sort dataframe by Sector (ascending), then Plot Size (ascending), 
     then Plot No (ascending).
-
-    This ensures listings are arranged by Sector (I-10/1,2,3,4 < I-11/1,2,3,4 ...),
-    within each sector by Plot Size (smallest first), and within each plot size by Plot No.
     """
     if df.empty:
         return df
     
     sorted_df = df.copy()
     
-    # Extract numeric values from Plot Size for proper sorting
     def extract_plot_size_numeric(plot_size):
         if pd.isna(plot_size):
             return 0
         plot_size_str = str(plot_size).lower().strip()
-        
-        # Extract first number (handle decimals too)
         match = re.search(r'(\d+(\.\d+)?)', plot_size_str)
         if match:
             base_value = float(match.group(1))
         else:
             return 0
         
-        # Apply multipliers for different units to convert everything to Marla equivalent
         if 'kanal' in plot_size_str:
-            base_value *= 20  # 1 Kanal = 20 Marla
+            base_value *= 20
         elif 'acre' in plot_size_str:
-            base_value *= 160  # 1 Acre = 160 Marla
-        # If it's already in Marla or no unit specified, keep as is
+            base_value *= 160
         
         return base_value
     
-    # Extract numeric value from Plot No for sorting
     def extract_plot_no_numeric(plot_no):
         if pd.isna(plot_no):
             return 0
         plot_no_str = str(plot_no).strip()
-        
-        # Try to extract the first number
         match = re.search(r'(\d+(\.\d+)?)', plot_no_str)
         if match:
             return float(match.group(1))
         return 0
     
-    # Create sort columns
-    # 1. Sector sort key
     def create_sector_sort_key(sector):
         sector_str = str(sector).strip().upper()
-        
-        # Handle I-10, I-10/1, I-10/2, I-10/3, I-10/4 pattern
         pattern = r'I-(\d+)(?:/(\d+))?'
         match = re.match(pattern, sector_str)
-        
         if match:
             main_num = int(match.group(1)) if match.group(1) else 0
             sub_num = int(match.group(2)) if match.group(2) else 0
-            
-            # Return tuple for proper sorting: (main_sector_number, subdivision_number)
             return (main_num, sub_num)
-        
-        # For non-matching patterns, use the original string
-        # We'll assign high values to put non-standard sectors at the end
         return (9999, 9999)
     
     sorted_df["Sector_Sort_Key"] = sorted_df["Sector"].apply(create_sector_sort_key)
-    
-    # 2. Plot Size numeric value
     sorted_df["Plot_Size_Numeric"] = sorted_df["Plot Size"].apply(extract_plot_size_numeric)
-    
-    # 3. Plot No numeric value
     sorted_df["Plot_No_Numeric"] = sorted_df["Plot No"].apply(extract_plot_no_numeric)
     
-    # Sort by Sector first, then Plot Size, then Plot No
     try:
-        # Convert Sector_Sort_Key to string for stable sorting
         sorted_df["Sector_Sort_Str"] = sorted_df["Sector_Sort_Key"].astype(str)
-        
         sorted_df = sorted_df.sort_values(
             by=["Sector_Sort_Str", "Plot_Size_Numeric", "Plot_No_Numeric"], 
             ascending=[True, True, True]
         )
     except Exception as e:
-        # Fallback to simple string sort if numeric sort fails
         st.warning(f"Could not sort by numeric values: {e}")
         sorted_df = sorted_df.sort_values(
             by=["Sector", "Plot Size", "Plot No"], 
             ascending=[True, True, True]
         )
     
-    # Remove temporary columns
     columns_to_drop = ["Plot_Size_Numeric", "Sector_Sort_Key", "Sector_Sort_Str", "Plot_No_Numeric"]
     sorted_df = sorted_df.drop(
         [col for col in columns_to_drop if col in sorted_df.columns], 
@@ -796,7 +714,6 @@ def sort_dataframe_with_i15_street_no(df):
     sorted_df["Sort_Key"] = sorted_df.apply(get_sort_key, axis=1)
     
     try:
-        # Convert sort key to string for stable sorting
         sorted_df["Sort_Key_Str"] = sorted_df["Sort_Key"].astype(str)
         sorted_df = sorted_df.sort_values(by="Sort_Key_Str", ascending=True)
     except Exception as e:
@@ -814,7 +731,6 @@ def update_url_parameters():
     """Update URL parameters based on current filter state"""
     params = {}
     
-    # Add all filter parameters to URL
     if 'sector_filter' in st.session_state and st.session_state.sector_filter:
         params['sector'] = ','.join(st.session_state.sector_filter)
     
@@ -857,36 +773,29 @@ def update_url_parameters():
     if 'selected_saved' in st.session_state and st.session_state.selected_saved:
         params['saved_contact'] = st.session_state.selected_saved
     
-    # Update URL parameters
     st.query_params.update(**params)
 
 def parse_url_parameters():
     """Parse URL parameters and set session state"""
     params = st.query_params
     
-    # Sector filter
     if 'sector' in params:
         sectors = params['sector'].split(',')
         st.session_state.sector_filter = [s.strip() for s in sectors if s.strip()]
     
-    # Plot size filter
     if 'plot_size' in params:
         plot_sizes = params['plot_size'].split(',')
         st.session_state.plot_size_filter = [ps.strip() for ps in plot_sizes if ps.strip()]
     
-    # Street filter
     if 'street' in params:
         st.session_state.street_filter = params['street']
     
-    # Plot no filter
     if 'plot_no' in params:
         st.session_state.plot_no_filter = params['plot_no']
     
-    # Contact filter
     if 'contact' in params:
         st.session_state.contact_filter = params['contact']
     
-    # Price filters
     if 'price_from' in params:
         try:
             st.session_state.price_from = float(params['price_from'])
@@ -899,7 +808,6 @@ def parse_url_parameters():
         except:
             st.session_state.price_to = 1000.0
     
-    # Features filters
     if 'features_client' in params:
         features = params['features_client'].split(',')
         st.session_state.selected_features_clients = [f.strip() for f in features if f.strip()]
@@ -908,27 +816,21 @@ def parse_url_parameters():
         features = params['features_dealer'].split(',')
         st.session_state.selected_features_dealers = [f.strip() for f in features if f.strip()]
     
-    # Date filter
     if 'date' in params:
         st.session_state.date_filter = params['date']
     
-    # Property type filter
     if 'property_type' in params:
         st.session_state.selected_prop_type = params['property_type']
     
-    # Missing contact filter
     if 'missing_contact' in params:
         st.session_state.missing_contact_filter = params['missing_contact'].lower() == 'true'
     
-    # Dealer filter
     if 'dealer' in params:
         st.session_state.selected_dealer = params['dealer']
     
-    # Saved contact filter
     if 'saved_contact' in params:
         st.session_state.selected_saved = params['saved_contact']
     
-    # Mark that filters were loaded from URL
     st.session_state.filters_from_url = True
 
 def color_grouped_html_table(df, group_col='GroupKey', max_rows=5000):
@@ -950,9 +852,7 @@ def color_grouped_html_table(df, group_col='GroupKey', max_rows=5000):
     groups = df[group_col].unique()
     color_map = {group: f"hsl({int(i*360/len(groups))}, 70%, 80%)" for i, group in enumerate(groups)}
     
-    # Build HTML
     html = '<table style="border-collapse: collapse; width: 100%; font-size: 0.9em;">'
-    # Header
     html += '<thead><tr>'
     for col in df.columns:
         if col != group_col:
@@ -965,7 +865,6 @@ def color_grouped_html_table(df, group_col='GroupKey', max_rows=5000):
         for col in df.columns:
             if col != group_col:
                 val = str(row[col])
-                # Escape HTML special characters to prevent injection
                 val = val.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&#39;')
                 html += f'<td style="border: 1px solid #ddd; padding: 8px;">{val}</td>'
         html += '</tr>'
@@ -975,7 +874,6 @@ def color_grouped_html_table(df, group_col='GroupKey', max_rows=5000):
 def show_plots_manager():
     st.header("🏠 Plots Management")
     
-    # Parse URL parameters on initial load
     if 'filters_from_url' not in st.session_state:
         parse_url_parameters()
     
@@ -984,7 +882,6 @@ def show_plots_manager():
     sold_df = load_sold_data()
     hold_df = load_hold_data().fillna("")
     
-    # Debug: Show total listings loaded
     st.caption(f"📊 Total listings loaded from Google Sheet: {len(df)}")
     
     if not contacts_df.empty:
@@ -1013,24 +910,19 @@ def show_plots_manager():
         </div>
         """, unsafe_allow_html=True)
         
-        # Get current available options
         all_sectors = sorted([str(s) for s in df["Sector"].dropna().unique() if s and str(s).strip() != ""])
         all_plot_sizes = sorted([str(s) for s in df["Plot Size"].dropna().unique() if s and str(s).strip() != ""])
         
-        # Initialize or fix session state for multiselect filters
         if 'sector_filter' not in st.session_state or st.session_state.filters_reset:
             st.session_state.sector_filter = []
         else:
-            # Ensure session state only contains valid sectors
             st.session_state.sector_filter = [s for s in st.session_state.sector_filter if s in all_sectors]
         
         if 'plot_size_filter' not in st.session_state or st.session_state.filters_reset:
             st.session_state.plot_size_filter = []
         else:
-            # Ensure session state only contains valid plot sizes
             st.session_state.plot_size_filter = [s for s in st.session_state.plot_size_filter if s in all_plot_sizes]
         
-        # Sector filter with safe defaults
         sector_filter = st.multiselect(
             "Sector", 
             options=all_sectors,
@@ -1039,7 +931,6 @@ def show_plots_manager():
         )
         current_filters['sector_filter'] = sector_filter
         
-        # Plot size filter with safe defaults
         plot_size_filter = st.multiselect(
             "Plot Size", 
             options=all_plot_sizes,
@@ -1076,16 +967,13 @@ def show_plots_manager():
             price_to = st.number_input("Price To (in Lacs)", min_value=0.0, value=st.session_state.price_to, step=1.0, key="price_to_input")
             current_filters['price_to'] = price_to
         
-        # Get fixed feature options for clients
         fixed_client_features = get_client_feature_options()
         
         if 'selected_features_clients' not in st.session_state or st.session_state.filters_reset:
             st.session_state.selected_features_clients = []
         else:
-            # Ensure session state only contains valid features
             st.session_state.selected_features_clients = [f for f in st.session_state.selected_features_clients if f in fixed_client_features]
             
-        # Feature filter for clients with fixed options and multi-select
         selected_features_clients = st.multiselect(
             "Features (Clients)", 
             options=fixed_client_features,
@@ -1094,16 +982,13 @@ def show_plots_manager():
         )
         current_filters['selected_features_clients'] = selected_features_clients
         
-        # Get fixed feature options for dealers
         fixed_dealer_features = get_dealer_feature_options()
         
         if 'selected_features_dealers' not in st.session_state or st.session_state.filters_reset:
             st.session_state.selected_features_dealers = []
         else:
-            # Ensure session state only contains valid features
             st.session_state.selected_features_dealers = [f for f in st.session_state.selected_features_dealers if f in fixed_dealer_features]
             
-        # Feature filter for dealers with fixed options and multi-select
         selected_features_dealers = st.multiselect(
             "Features (Dealers)", 
             options=fixed_dealer_features,
@@ -1131,6 +1016,7 @@ def show_plots_manager():
         missing_contact_filter = st.checkbox("Show listings with missing contact/name", value=st.session_state.missing_contact_filter, key="missing_contact_filter_input")
         current_filters['missing_contact_filter'] = missing_contact_filter
 
+        # Get dealer names using cached function (much faster)
         dealer_names, contact_to_name = get_dynamic_dealer_names(df, current_filters)
         
         if 'selected_dealer' not in st.session_state or st.session_state.filters_reset:
@@ -1165,7 +1051,6 @@ def show_plots_manager():
         filters_changed = current_filters != st.session_state.last_filter_state
         if filters_changed:
             st.session_state.last_filter_state = current_filters.copy()
-            # Update URL parameters when filters change
             update_url_parameters()
             st.rerun()
         
@@ -1186,7 +1071,6 @@ def show_plots_manager():
             st.session_state.selected_saved = ""
             st.session_state.filters_reset = True
             st.session_state.last_filter_state = {}
-            # Clear URL parameters when resetting filters
             st.query_params.clear()
             st.rerun()
         else:
@@ -1223,6 +1107,7 @@ def show_plots_manager():
                 formatted_num = format_phone_link(num)
                 cols[i].markdown(f'<a href="tel:{formatted_num}" style="display: inline-block; padding: 0.5rem 1rem; background-color: #25D366; color: white; text-decoration: none; border-radius: 0.5rem; font-weight: 600;">Call {num}</a>', unsafe_allow_html=True)
 
+    # --- MAIN FILTERING (now using vectorized operations) ---
     df_filtered = df.copy()
 
     if st.session_state.selected_dealer:
@@ -1246,12 +1131,11 @@ def show_plots_manager():
         df_filtered = df_filtered[df_filtered["Plot Size"].isin(st.session_state.plot_size_filter)]
     
     if st.session_state.street_filter:
-        street_pattern = re.compile(re.escape(st.session_state.street_filter), re.IGNORECASE)
-        df_filtered = df_filtered[df_filtered["Street No"].apply(lambda x: bool(street_pattern.search(str(x))))]
+        # Vectorized string contains
+        df_filtered = df_filtered[df_filtered["Street No"].astype(str).str.contains(st.session_state.street_filter, case=False, na=False, regex=True)]
     
     if st.session_state.plot_no_filter:
-        plot_pattern = re.compile(re.escape(st.session_state.plot_no_filter), re.IGNORECASE)
-        df_filtered = df_filtered[df_filtered["Plot No"].apply(lambda x: bool(plot_pattern.search(str(x))))]
+        df_filtered = df_filtered[df_filtered["Plot No"].astype(str).str.contains(st.session_state.plot_no_filter, case=False, na=False, regex=True)]
     
     if st.session_state.contact_filter:
         cnum = clean_number(st.session_state.contact_filter)
@@ -1268,38 +1152,32 @@ def show_plots_manager():
 
     df_filtered["ParsedPrice"] = df_filtered["Demand"].apply(parse_price)
     if "ParsedPrice" in df_filtered.columns:
-        # Split into valid and invalid price rows
         valid_price_mask = df_filtered["ParsedPrice"].notnull()
         df_filtered_valid = df_filtered[valid_price_mask]
         df_filtered_invalid = df_filtered[~valid_price_mask]
         
-        # Apply price filter only to valid price rows
         if not df_filtered_valid.empty:
             df_filtered_valid = df_filtered_valid[
                 (df_filtered_valid["ParsedPrice"] >= st.session_state.price_from) & 
                 (df_filtered_valid["ParsedPrice"] <= st.session_state.price_to)
             ]
-        # Combine back valid and invalid rows
         df_filtered = pd.concat([df_filtered_valid, df_filtered_invalid], ignore_index=True)
 
-    # Apply client features filter
     if st.session_state.selected_features_clients:
         df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match_enhanced(x, st.session_state.selected_features_clients))]
     
-    # Apply dealer features filter
     if st.session_state.selected_features_dealers:
         df_filtered = df_filtered[df_filtered["Features"].apply(lambda x: fuzzy_feature_match_enhanced(x, st.session_state.selected_features_dealers))]
 
     df_filtered = filter_by_date(df_filtered, st.session_state.date_filter)
 
-    # --- REPLACED sort_dataframe_with_i15_street_no WITH sort_by_sector_and_plot_size ---
+    # --- Sorting ---
     df_filtered_sorted = sort_by_sector_and_plot_size(df_filtered)
 
     if "Timestamp" in df_filtered_sorted.columns:
         cols = [col for col in df_filtered_sorted.columns if col != "Timestamp"] + ["Timestamp"]
         df_filtered_sorted = df_filtered_sorted[cols]
 
-    # The sorted-by-sector-plot-size table now uses the same function (already the new order)
     df_filtered_sorted_by_sector_size = sort_by_sector_and_plot_size(df_filtered)
 
     display_main_table = df_filtered_sorted.copy()
@@ -1310,7 +1188,7 @@ def show_plots_manager():
         csv_data = display_main_table.to_csv(index=False)
         st.download_button(label="📥 Download Filtered Listings as CSV", data=csv_data, file_name=f"filtered_listings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv", key="download_csv")
     
-    # Calculate WhatsApp eligible count (keeping existing logic)
+    # WhatsApp eligible count
     whatsapp_eligible_count = 0
     for _, row in df_filtered.iterrows():
         sector = str(row.get("Sector", "")).strip()
@@ -1336,7 +1214,6 @@ def show_plots_manager():
     
     st.info(f"📊 **Total filtered listings:** {len(display_main_table)} | ✅ **WhatsApp eligible:** {whatsapp_eligible_count}")
     
-    # Show current URL with filters
     if st.query_params:
         st.caption(f"🔗 **Shareable URL with current filters:** `{st.query_params}`")
     
@@ -1345,7 +1222,6 @@ def show_plots_manager():
     else:
         st.info("No listings match your filters")
     
-    # NEW TABLE: Sorted by Sector and Plot Size (already using new order)
     st.markdown("---")
     st.subheader("📊 Listings Sorted by Sector & Plot Size (Ascending)")
     
@@ -1384,12 +1260,10 @@ def show_plots_manager():
         hold_df_filtered = hold_df_filtered[hold_df_filtered["Plot Size"].isin(st.session_state.plot_size_filter)]
     
     if st.session_state.street_filter and "Street No" in hold_df_filtered.columns:
-        street_pattern = re.compile(re.escape(st.session_state.street_filter), re.IGNORECASE)
-        hold_df_filtered = hold_df_filtered[hold_df_filtered["Street No"].apply(lambda x: bool(street_pattern.search(str(x))))]
+        hold_df_filtered = hold_df_filtered[hold_df_filtered["Street No"].astype(str).str.contains(st.session_state.street_filter, case=False, na=False, regex=True)]
     
     if st.session_state.plot_no_filter and "Plot No" in hold_df_filtered.columns:
-        plot_pattern = re.compile(re.escape(st.session_state.plot_no_filter), re.IGNORECASE)
-        hold_df_filtered = hold_df_filtered[hold_df_filtered["Plot No"].apply(lambda x: bool(plot_pattern.search(str(x))))]
+        hold_df_filtered = hold_df_filtered[hold_df_filtered["Plot No"].astype(str).str.contains(st.session_state.plot_no_filter, case=False, na=False, regex=True)]
     
     if not st.session_state.missing_contact_filter:
         if "Extracted Contact" in hold_df_filtered.columns and "Extracted Name" in hold_df_filtered.columns:
@@ -1398,7 +1272,6 @@ def show_plots_manager():
                 ~(hold_df_filtered["Extracted Name"].isna() | (hold_df_filtered["Extracted Name"] == ""))
             ]
     
-    # --- REPLACED sort_dataframe_with_i15_street_no WITH sort_by_sector_and_plot_size ---
     hold_df_filtered = sort_by_sector_and_plot_size(hold_df_filtered)
     
     if not hold_df_filtered.empty:
@@ -1428,7 +1301,6 @@ def show_plots_manager():
                 ~(todays_unique_filtered["Extracted Name"].isna() | (todays_unique_filtered["Extracted Name"] == ""))
             ]
         
-        # --- REPLACED sort_dataframe_with_i15_street_no WITH sort_by_sector_and_plot_size ---
         todays_unique_filtered = sort_by_sector_and_plot_size(todays_unique_filtered)
         st.info(f"Found {len(todays_unique_filtered)} unique listings added today with new Sector & Plot No combinations")
         display_table_with_actions(todays_unique_filtered, "Today_Unique", height=300, show_hold_button=True)
@@ -1456,23 +1328,20 @@ def show_plots_manager():
                 ~(weeks_unique_filtered["Extracted Name"].isna() | (weeks_unique_filtered["Extracted Name"] == ""))
             ]
         
-        # --- REPLACED sort_dataframe_with_i15_street_no WITH sort_by_sector_and_plot_size ---
         weeks_unique_filtered = sort_by_sector_and_plot_size(weeks_unique_filtered)
         st.info(f"Found {len(weeks_unique_filtered)} unique listings added in the last 7 days with new Sector & Plot No combinations")
         display_table_with_actions(weeks_unique_filtered, "Week_Unique", height=300, show_hold_button=True)
     else:
         st.info("No unique listings found for this week")
     
-    # --- MOVED DEALER-SPECIFIC DUPLICATES OUTSIDE THE DEALER CONDITIONAL ---
     st.markdown("---")
     st.subheader("👥 Dealer-Specific Duplicates")
     
-    # Determine contacts to use: if dealer selected, use that dealer's contacts; otherwise None (all listings)
     if st.session_state.selected_dealer:
         actual_name = st.session_state.selected_dealer.split(". ", 1)[1] if ". " in st.session_state.selected_dealer else st.session_state.selected_dealer
         selected_contacts = [c for c, name in contact_to_name.items() if name == actual_name]
     else:
-        selected_contacts = None  # means consider all listings
+        selected_contacts = None
     
     styled_dealer_duplicates, dealer_duplicates_df = create_dealer_specific_duplicates_view(df, selected_contacts)
     
@@ -1488,7 +1357,6 @@ def show_plots_manager():
         else:
             st.info("Showing all duplicate listings (color‑grouped by key)")
         
-        # --- FIX: Avoid rendering HTML if None is returned (Too many rows) ---
         if styled_dealer_duplicates is not None:
             st.markdown("**Color Grouped View (Read-only)**")
             try:
@@ -1499,7 +1367,6 @@ def show_plots_manager():
         
         st.markdown("---")
         st.markdown("**Actionable View (With Checkboxes)**")
-        # For duplicates, we keep the original I‑15 sorting (do not change)
         dealer_duplicates_df = sort_dataframe_with_i15_street_no(dealer_duplicates_df)
         display_table_with_actions(dealer_duplicates_df, "Dealer_Duplicates", height=400, show_hold_button=True)
     else:
@@ -1517,10 +1384,10 @@ def show_plots_manager():
         sold_df_filtered = sold_df_filtered[sold_df_filtered["Plot Size"].isin(st.session_state.plot_size_filter)]
     
     if st.session_state.street_filter and "Street No" in sold_df_filtered.columns:
-        sold_df_filtered = sold_df_filtered[sold_df_filtered["Street No"].str.contains(st.session_state.street_filter, case=False, na=False)]
+        sold_df_filtered = sold_df_filtered[sold_df_filtered["Street No"].astype(str).str.contains(st.session_state.street_filter, case=False, na=False, regex=True)]
     
     if st.session_state.plot_no_filter and "Plot No" in sold_df_filtered.columns:
-        sold_df_filtered = sold_df_filtered[sold_df_filtered["Plot No"].str.contains(st.session_state.plot_no_filter, case=False, na=False)]
+        sold_df_filtered = sold_df_filtered[sold_df_filtered["Plot No"].astype(str).str.contains(st.session_state.plot_no_filter, case=False, na=False, regex=True)]
     
     if "Property Type" in sold_df_filtered.columns and st.session_state.selected_prop_type and st.session_state.selected_prop_type != "All":
         sold_df_filtered = sold_df_filtered[sold_df_filtered["Property Type"].astype(str).str.strip() == st.session_state.selected_prop_type]
@@ -1532,7 +1399,6 @@ def show_plots_manager():
                 ~(sold_df_filtered["Extracted Name"].isna() | (sold_df_filtered["Extracted Name"] == ""))
             ]
     
-    # --- REPLACED sort_dataframe_with_i15_street_no WITH sort_by_sector_and_plot_size ---
     sold_df_filtered = sort_by_sector_and_plot_size(sold_df_filtered)
     
     if not sold_df_filtered.empty:
@@ -1585,7 +1451,6 @@ def show_plots_manager():
         if not incomplete_df.empty:
             incomplete_df["Extracted Name"] = incomplete_df["Extracted Name"].fillna("")
             incomplete_df = incomplete_df.sort_values(by="Extracted Name")
-            # --- REPLACED sort_dataframe_with_i15_street_no WITH sort_by_sector_and_plot_size ---
             incomplete_df = sort_by_sector_and_plot_size(incomplete_df)
         
         if not incomplete_df.empty:
@@ -1600,10 +1465,8 @@ def show_plots_manager():
     st.subheader("👥 Duplicate Listings Detection")
     
     if not df_filtered.empty:
-        # Use existing utility but wrapped safely
         try:
             styled_duplicates_df, duplicates_df = create_duplicates_view_updated(df_filtered)
-            # --- FIX: If dataset is too large, drop style to prevent crash ---
             if len(duplicates_df) > 50:
                 styled_duplicates_df = None
         except:
@@ -1620,7 +1483,6 @@ def show_plots_manager():
         else:
             st.info("Showing duplicate listings with matching Sector, Plot No, Street No, Plot Size but different Contact/Name/Demand")
             
-            # --- NEW: Color‑grouped HTML table (read‑only) with increased limit ---
             color_html, too_many = color_grouped_html_table(duplicates_df, max_rows=5000)
             if too_many:
                 st.warning(f"Too many duplicates ({len(duplicates_df)}) to display color grouping. Showing actionable view only.")
@@ -1668,7 +1530,6 @@ def show_plots_manager():
             st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
             st.stop()
 
-        # UPDATED: Generate WhatsApp messages with features appended and blank lines
         messages = generate_whatsapp_messages_with_features_appended(df_filtered)
         if not messages:
             st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots; No 'offer required' in demand; No duplicates with same Sector/Plot No/Street No/Plot Size/Demand.")
@@ -1707,7 +1568,6 @@ def generate_whatsapp_messages_with_features_appended(df):
         if "offer required" in price.lower():
             continue
             
-        # Add features to the row for later use
         row_dict = row.to_dict()
         row_dict["Features_Text"] = features
         eligible_listings.append(row_dict)
@@ -1719,15 +1579,18 @@ def generate_whatsapp_messages_with_features_appended(df):
     
     eligible_df["ParsedPrice"] = eligible_df["Demand"].apply(parse_price)
     
-    eligible_df["DuplicateKey"] = eligible_df.apply(
-        lambda row: f"{str(row.get('Sector', '')).strip().upper()}|{str(row.get('Plot No', '')).strip().upper()}|{str(row.get('Street No', '')).strip().upper()}|{str(row.get('Plot Size', '')).strip().upper()}|{str(row.get('Demand', '')).strip().upper()}", 
-        axis=1
+    # Vectorized duplicate key generation
+    eligible_df["DuplicateKey"] = (
+        eligible_df["Sector"].fillna("").str.upper().str.strip() + "|" +
+        eligible_df["Plot No"].fillna("").str.upper().str.strip() + "|" +
+        eligible_df["Street No"].fillna("").str.upper().str.strip() + "|" +
+        eligible_df["Plot Size"].fillna("").str.upper().str.strip() + "|" +
+        eligible_df["Demand"].fillna("").str.upper().str.strip()
     )
     
     filtered_listings = []
     for key, group in eligible_df.groupby("DuplicateKey"):
         if len(group) > 1:
-            # Safer: sort by ParsedPrice and take the first row (lowest price)
             lowest_price_row = group.sort_values("ParsedPrice").iloc[0]
             filtered_listings.append(lowest_price_row)
         else:
@@ -1735,7 +1598,6 @@ def generate_whatsapp_messages_with_features_appended(df):
     
     final_df = pd.DataFrame(filtered_listings)
     
-    # Group by sector for message organization
     final_df["Sector_Key"] = final_df["Sector"].apply(lambda x: str(x).strip())
     final_df = final_df.sort_values(by=["Sector_Key", "Plot No"])
     
@@ -1751,37 +1613,28 @@ def generate_whatsapp_messages_with_features_appended(df):
         street = str(row.get("Street No", "")).strip()
         features = str(row.get("Features_Text", row.get("Features", ""))).strip()
         
-        # Start new sector header if needed
         if sector != current_sector:
             if current_message:
-                # Join listings with double newline (blank line between listings)
                 messages.append("\n\n".join(current_message))
                 current_message = []
             if sector:
-                # Sector header line (no blank line after header yet – will be added when joined)
                 current_message.append(f"{sector}:")
                 current_sector = sector
         
-        # Format listing based on sector
         if sector.startswith("I-15"):
-            # I-15 format: street first, then plot, size, demand, features
             if street:
                 line = f"St: {street} | P: {plot_no} | S: {size} | D: {price} | {features}"
             else:
                 line = f"P: {plot_no} | S: {size} | D: {price} | {features}"
         else:
-            # Non-I-15 format
             line = f"P: {plot_no} | S: {size} | D: {price} | {features}"
         
         current_message.append(line)
         
-        # Split into messages of 15 listings each (header counts as one line)
-        # Header + 15 listings would be 16 lines; we want to keep messages manageable
-        if len(current_message) >= 16:  # 1 sector header + 15 listings
+        if len(current_message) >= 16:
             messages.append("\n\n".join(current_message))
             current_message = [f"{sector} (continued):"]
     
-    # Add any remaining listings
     if current_message:
         messages.append("\n\n".join(current_message))
     
@@ -1820,7 +1673,6 @@ def mark_listings_sold(rows_data):
             if delete_rows_from_sheet(row_nums):
                 st.success(f"✅ Successfully marked {len(rows_data)} listing(s) as sold and moved to Sold sheet!")
                 st.cache_data.clear()
-                # Reset filter session state to prevent multiselect errors
                 reset_filter_session_state_after_deletion()
                 st.rerun()
             else:
@@ -1859,7 +1711,6 @@ def move_listings_to_hold(rows_data, source_table):
             if move_to_hold(row_nums):
                 st.success(f"✅ Successfully moved {len(rows_data)} listing(s) to Hold!")
                 st.cache_data.clear()
-                # Reset filter session state to prevent multiselect errors
                 reset_filter_session_state_after_deletion()
                 st.rerun()
             else:
@@ -1896,7 +1747,6 @@ def move_listings_to_plots(rows_data):
             if move_to_plots(row_nums):
                 st.success(f"✅ Successfully moved {len(rows_data)} listing(s) back to Available Plots!")
                 st.cache_data.clear()
-                # Reset filter session state to prevent multiselect errors
                 reset_filter_session_state_after_deletion()
                 st.rerun()
             else:
