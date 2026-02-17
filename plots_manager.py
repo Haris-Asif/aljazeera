@@ -122,6 +122,7 @@ def create_dealer_specific_duplicates_view(df, dealer_contacts=None):
     """
     Create a view of duplicates specific to the selected dealer's listings.
     If dealer_contacts is None or empty, consider all listings.
+    Optimized using vectorized operations.
     """
     if df.empty:
         return None, pd.DataFrame()
@@ -133,75 +134,64 @@ def create_dealer_specific_duplicates_view(df, dealer_contacts=None):
     df_normalized["Street_No_Norm"] = df_normalized["Street No"].astype(str).str.strip().str.upper()
     df_normalized["Plot_Size_Norm"] = df_normalized["Plot Size"].astype(str).str.strip().str.upper()
     
-    # Get listings from the selected dealer (or all if no dealer selected)
-    if dealer_contacts:
-        dealer_listings = df_normalized[
-            df_normalized["Extracted Contact"].apply(
-                lambda x: any(contact in clean_number(str(x)) for contact in dealer_contacts)
-            )
-        ]
-    else:
-        dealer_listings = df_normalized  # consider all listings
-    
-    if dealer_listings.empty:
-        return None, pd.DataFrame()
-    
-    # Create group keys for the dealer's listings
-    dealer_listings["GroupKey"] = dealer_listings.apply(
+    # Create group key for all rows
+    df_normalized["GroupKey"] = df_normalized.apply(
         lambda row: f"{row['Sector_Norm']}|{row['Plot_No_Norm']}|{row['Street_No_Norm']}|{row['Plot_Size_Norm']}", 
         axis=1
     )
     
-    # Find all listings that match the dealer's group keys
-    all_matching_listings = []
-    for group_key in dealer_listings["GroupKey"].unique():
-        # Get all listings with this group key
-        matching_listings = df_normalized[
-            df_normalized.apply(
-                lambda row: f"{row['Sector_Norm']}|{row['Plot_No_Norm']}|{row['Street_No_Norm']}|{row['Plot_Size_Norm']}" == group_key,
-                axis=1
-            )
-        ]
-        
-        # Only include if there are multiple different contacts
-        unique_contacts = set()
-        for contact_str in matching_listings["Extracted Contact"]:
-            contacts = [clean_number(c) for c in str(contact_str).split(",") if clean_number(c)]
-            unique_contacts.update(contacts)
-        
-        if len(unique_contacts) > 1:
-            matching_listings = matching_listings.copy()
-            matching_listings["GroupKey"] = group_key
-            all_matching_listings.append(matching_listings)
+    # Determine which groups belong to the dealer (or all if no dealer specified)
+    if dealer_contacts:
+        dealer_mask = df_normalized["Extracted Contact"].apply(
+            lambda x: any(contact in clean_number(str(x)) for contact in dealer_contacts)
+        )
+        dealer_group_keys = set(df_normalized.loc[dealer_mask, "GroupKey"].unique())
+    else:
+        dealer_group_keys = set(df_normalized["GroupKey"].unique())
     
-    if not all_matching_listings:
+    if not dealer_group_keys:
         return None, pd.DataFrame()
     
-    # Combine all duplicates
-    duplicates_df = pd.concat(all_matching_listings, ignore_index=True)
+    # Filter to only rows that belong to those group keys
+    rows_in_dealer_groups = df_normalized[df_normalized["GroupKey"].isin(dealer_group_keys)]
+    
+    # Group by GroupKey and find groups with multiple unique contacts
+    def has_multiple_contacts(group):
+        unique_contacts = set()
+        for contact_str in group["Extracted Contact"]:
+            contacts = [clean_number(c) for c in str(contact_str).split(",") if clean_number(c)]
+            unique_contacts.update(contacts)
+        return len(unique_contacts) > 1
+    
+    groups_with_duplicates = rows_in_dealer_groups.groupby("GroupKey").filter(has_multiple_contacts)
+    
+    if groups_with_duplicates.empty:
+        return None, pd.DataFrame()
     
     # Remove temporary normalized columns
-    duplicates_df = duplicates_df.drop(
-        ["Sector_Norm", "Plot_No_Norm", "Street_No_Norm", "Plot_Size_Norm"], 
+    duplicates_df = groups_with_duplicates.drop(
+        ["Sector_Norm", "Plot_No_Norm", "Street_No_Norm", "Plot_Size_Norm", "GroupKey"], 
         axis=1, 
         errors="ignore"
     )
     
     # --- PERFORMANCE FIX: Limit styling row count ---
-    # Attempting to style and render HTML for hundreds of rows crashes the app
     if len(duplicates_df) > 50:
-        # If too many rows, return just the dataframe, no styled object to prevent OOM
         return None, duplicates_df
 
     # Create styled version with color grouping
     try:
-        groups = duplicates_df["GroupKey"].unique()
+        groups = groups_with_duplicates["GroupKey"].unique()
         color_mapping = {group: f"hsl({int(i*360/len(groups))}, 70%, 80%)" for i, group in enumerate(groups)}
         
         def color_group(row):
             return [f"background-color: {color_mapping[row['GroupKey']]}"] * len(row)
         
-        styled_duplicates_df = duplicates_df.style.apply(color_group, axis=1)
+        # Need to add GroupKey back temporarily for styling
+        duplicates_df_styled = duplicates_df.copy()
+        duplicates_df_styled["GroupKey"] = groups_with_duplicates["GroupKey"].values
+        styled_duplicates_df = duplicates_df_styled.style.apply(color_group, axis=1)
+        styled_duplicates_df = styled_duplicates_df.hide(columns=["GroupKey"])
         return styled_duplicates_df, duplicates_df
     except Exception as e:
         return None, duplicates_df
@@ -1620,15 +1610,8 @@ def show_plots_manager():
         else:
             st.info("Showing duplicate listings with matching Sector, Plot No, Street No, Plot Size but different Contact/Name/Demand")
             
-            # --- NEW: Color‑grouped HTML table (read‑only) with increased limit ---
-            color_html, too_many = color_grouped_html_table(duplicates_df, max_rows=5000)
-            if too_many:
-                st.warning(f"Too many duplicates ({len(duplicates_df)}) to display color grouping. Showing actionable view only.")
-            elif color_html:
-                st.markdown("**Color Grouped View (Read-only)**")
-                st.markdown(f'<div style="height: 400px; overflow: auto; border: 1px solid #e6e9ef; border-radius: 0.5rem;">{color_html}</div>', unsafe_allow_html=True)
+            # --- REMOVED color_grouped_html_table call to improve performance ---
             
-            st.markdown("---")
             st.markdown("**Actionable View (With Checkboxes)**")
             duplicates_df = sort_dataframe_with_i15_street_no(duplicates_df)
             display_table_with_actions(duplicates_df, "Duplicates", height=400, show_hold_button=True)
@@ -1668,8 +1651,8 @@ def show_plots_manager():
             st.error("❌ Invalid number. Use 0300xxxxxxx format or select from contact.")
             st.stop()
 
-        # UPDATED: Generate WhatsApp messages with features appended and blank lines
-        messages = generate_whatsapp_messages_with_features_appended(df_filtered)
+        # UPDATED: Generate WhatsApp messages with features appended and blank lines (with caching)
+        messages = generate_whatsapp_messages_with_features_appended_cached(df_filtered)
         if not messages:
             st.warning("⚠️ No valid listings to include. Listings must have: Sector, Plot No, Size, Price; I-15 must have Street No; No 'series' plots; No 'offer required' in demand; No duplicates with same Sector/Plot No/Street No/Plot Size/Demand.")
         else:
@@ -1681,6 +1664,11 @@ def show_plots_manager():
                 link = f"https://wa.me/{wa_number}?text={encoded}"
                 st.markdown(f'<a href="{link}" target="_blank" style="display: inline-block; padding: 0.75rem 1.5rem; background-color: #25D366; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 0.5rem 0;">📩 Send Message {i+1}</a>', unsafe_allow_html=True)
                 st.markdown("---")
+
+@st.cache_data(ttl=600)  # Cache for 10 minutes; recomputes if df changes
+def generate_whatsapp_messages_with_features_appended_cached(df):
+    """Cached version of generate_whatsapp_messages_with_features_appended."""
+    return generate_whatsapp_messages_with_features_appended(df)
 
 def generate_whatsapp_messages_with_features_appended(df):
     """Generate WhatsApp messages with features appended at the end of each listing.
